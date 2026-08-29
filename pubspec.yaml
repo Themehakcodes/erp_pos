@@ -1,0 +1,25 @@
+name: erp_pos
+description: "A new Flutter project."
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_pos_printer_platform_image_3: ^1.2.4
+  permission_handler: ^11.3.1
+  shared_preferences: ^2.5.5
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "lib/20.ico"
+
+flutter:
+  uses-material-design: true
