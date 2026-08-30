@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'api_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_pos_printer_platform_image_3/flutter_pos_printer_platform_image_3.dart';
 import 'dart:io';
@@ -203,9 +205,22 @@ class _OpeningBalanceScreenState extends State<OpeningBalanceScreen> {
 }
 
 class Product {
+  final String id;
+  final String stockId;
+  final String barcode;
   final String name;
   final double price;
-  Product(this.name, this.price);
+  Product(this.id, this.stockId, this.barcode, this.name, this.price);
+
+  factory Product.fromJson(Map<String, dynamic> json) {
+    return Product(
+      json['id'] ?? '',
+      json['stock_id'] ?? '',
+      json['barcode'] ?? '',
+      json['name'] ?? 'Unknown',
+      (json['sale_rate'] ?? json['stock_sale_rate_a'] ?? json['mrp'] ?? 0.0).toDouble(),
+    );
+  }
 }
 
 class CartItem {
@@ -373,9 +388,60 @@ class PosScreen extends StatefulWidget {
 }
 
 class _PosScreenState extends State<PosScreen> {
-  final List<CartItem> _cart = [CartItem(Product('Item-20', 20.0), 1)];
+  final List<CartItem> _cart = [];
+  List<Product> _products = [];
+  bool _isLoading = true;
+  bool _isCartVisible = true;
+  String _userId = "Cashier";
 
-  final String _userId = "ID: 45091";
+  @override
+  void initState() {
+    super.initState();
+    _loadData();
+  }
+
+  Future<void> _loadData() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() => _userId = prefs.getString('user_id') ?? 'Cashier');
+    try {
+      final dynamic data = await ApiService().getProducts(limit: 100);
+      setState(() {
+        List itemsList = [];
+        if (data is List) {
+          itemsList = data;
+        } else if (data is Map) {
+          if (data['items'] != null) itemsList = data['items'];
+          else if (data['products'] != null) itemsList = data['products'];
+          else if (data['data'] != null) itemsList = data['data'];
+        }
+        _products = itemsList.map((e) => Product.fromJson(e as Map<String, dynamic>)).toList();
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() => _isLoading = false);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+    }
+  }
+
+  void _logout() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('access_token');
+    await prefs.remove('shift_id');
+    await prefs.remove('terminal_id');
+    await prefs.remove('store_id');
+    if (mounted) {
+      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LoginScreen()));
+    }
+  }
+
+  void _addToCart(Product p) {
+    final index = _cart.indexWhere((item) => item.product.id == p.id);
+    if (index >= 0) {
+      _increment(index);
+    } else {
+      setState(() => _cart.add(CartItem(p, 1)));
+    }
+  }
 
   void _increment(int index) {
     setState(() {
@@ -387,6 +453,10 @@ class _PosScreenState extends State<PosScreen> {
     if (_cart[index].quantity > 1) {
       setState(() {
         _cart[index].quantity--;
+      });
+    } else {
+      setState(() {
+        _cart.removeAt(index);
       });
     }
   }
@@ -403,6 +473,157 @@ class _PosScreenState extends State<PosScreen> {
     return _cart.fold(
       0.0,
       (sum, item) => sum + (item.product.price * item.quantity),
+    );
+  }
+
+  Widget _buildQuantityButton({required IconData icon, required Color color, required Color iconColor, required VoidCallback onTap}) {
+    return Material(
+      color: color,
+      borderRadius: BorderRadius.circular(10),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          padding: const EdgeInsets.all(8),
+          child: Icon(icon, size: 20, color: iconColor),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildProductGrid() {
+    if (_isLoading) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(strokeWidth: 3),
+            const SizedBox(height: 16),
+            Text('Fetching Products...', style: TextStyle(color: Colors.grey.shade600, fontSize: 16, fontWeight: FontWeight.w500)),
+          ],
+        ),
+      );
+    }
+    if (_products.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.inventory_2_outlined, size: 64, color: Colors.grey.shade300),
+            const SizedBox(height: 16),
+            Text('No products available.', style: TextStyle(fontSize: 18, color: Colors.grey.shade600, fontWeight: FontWeight.w500)),
+          ],
+        ),
+      );
+    }
+    return GridView.builder(
+      padding: const EdgeInsets.all(24),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 4, 
+        childAspectRatio: 0.8,
+        crossAxisSpacing: 20,
+        mainAxisSpacing: 20,
+      ),
+      itemCount: _products.length,
+      itemBuilder: (context, index) {
+        final p = _products[index];
+        final List<Color> colors = [
+          Colors.blue.shade50, Colors.purple.shade50, Colors.orange.shade50, Colors.teal.shade50,
+          Colors.pink.shade50, Colors.indigo.shade50, Colors.green.shade50, Colors.amber.shade50
+        ];
+        final List<Color> iconColors = [
+          Colors.blue.shade400, Colors.purple.shade400, Colors.orange.shade400, Colors.teal.shade400,
+          Colors.pink.shade400, Colors.indigo.shade400, Colors.green.shade400, Colors.amber.shade400
+        ];
+        
+        final bgColor = colors[index % colors.length];
+        final iconColor = iconColors[index % iconColors.length];
+
+        return Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.04),
+                blurRadius: 15,
+                offset: const Offset(0, 8),
+              ),
+            ],
+            border: Border.all(color: Colors.grey.shade100, width: 1.5),
+          ),
+          child: Material(
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(20),
+            child: InkWell(
+              onTap: () => _addToCart(p),
+              borderRadius: BorderRadius.circular(20),
+              splashColor: iconColor.withOpacity(0.2),
+              highlightColor: iconColor.withOpacity(0.1),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(
+                    flex: 3,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: bgColor,
+                        borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
+                      ),
+                      child: Center(
+                        child: Icon(
+                          Icons.shopping_bag_outlined,
+                          size: 48,
+                          color: iconColor,
+                        ),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    flex: 2,
+                    child: Padding(
+                      padding: const EdgeInsets.all(14.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            p.name,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 15,
+                              letterSpacing: -0.3,
+                              color: Colors.black87,
+                              height: 1.2,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Colors.green.shade50,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              '₹${p.price.toStringAsFixed(2)}',
+                              style: TextStyle(
+                                color: Colors.green.shade800,
+                                fontWeight: FontWeight.w800,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -424,7 +645,6 @@ class _PosScreenState extends State<PosScreen> {
                     input = input.substring(0, input.length - 1);
                   }
                 } else {
-                  // Prevent long quantities
                   if (input.length < 5) {
                     input += val;
                   }
@@ -567,8 +787,9 @@ class _PosScreenState extends State<PosScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
         decoration: BoxDecoration(
-          border: Border.all(color: Colors.grey.shade300),
+          color: color.withOpacity(0.1),
           borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withOpacity(0.3)),
         ),
         child: Row(
           children: [
@@ -576,10 +797,14 @@ class _PosScreenState extends State<PosScreen> {
             const SizedBox(width: 16),
             Text(
               title,
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: color,
+              ),
             ),
             const Spacer(),
-            const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
+            Icon(Icons.chevron_right, color: color),
           ],
         ),
       ),
@@ -594,102 +819,126 @@ class _PosScreenState extends State<PosScreen> {
       barrierDismissible: false,
       builder: (_) => const Center(child: CircularProgressIndicator()),
     );
+    
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final storeId = prefs.getString('store_id');
+      final shiftId = prefs.getString('shift_id');
+      
+      final items = _cart.map((c) => {
+        "product_id": c.product.id,
+        "product_stock_id": c.product.stockId,
+        "barcode": c.product.barcode,
+        "quantity": c.quantity,
+        "mrp": c.product.price,
+        "sale_rate": c.product.price,
+        "line_total": c.product.price * c.quantity
+      }).toList();
+      
+      final fyId = prefs.getString('financial_year_id') ?? '';
 
-    await _printReceipt(method);
+      final saleData = {
+        "store_id": storeId,
+        "shift_id": shiftId,
+        "financial_year_id": fyId,
+        "invoice_date": DateTime.now().toIso8601String(),
+        "is_gst_bill": true,
+        "subtotal_amount": amountToCharge,
+        "taxable_amount": amountToCharge,
+        "net_amount": amountToCharge,
+        "items": items,
+        "payments": [
+          {
+            "payment_method_id": method == 'Cash' ? "00000000-0000-0000-0000-000000000001" : "00000000-0000-0000-0000-000000000002",
+            "amount_received": amountToCharge,
+            "amount_applied": amountToCharge,
+            "change_returned": 0.0
+          }
+        ]
+      };
+      
+      await ApiService().postSale(saleData);
+      
+      await _printReceipt(method);
 
-    if (mounted) {
-      Navigator.pop(context); // Close loader
-    }
-
-    widget.onSaleCompleted(method, amountToCharge);
-
-    setState(() {
-      for (var item in _cart) {
-        item.quantity = 1;
+      if (mounted) {
+        Navigator.pop(context); 
       }
-    });
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Transaction completed successfully!'),
-          backgroundColor: Colors.green,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      widget.onSaleCompleted(method, amountToCharge);
+
+      setState(() {
+        _cart.clear();
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Transaction completed successfully!'),
+            backgroundColor: Colors.green,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch(e) {
+      if (mounted) {
+        Navigator.pop(context); 
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to process sale: $e'),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
     }
   }
 
   Future<List<int>> _generateReceiptBytes(String method) async {
     final List<int> bytes = [];
-    
-    // Init
     bytes.addAll([0x1B, 0x40]); 
-    
-    // Title (Centered & Bold & Double Size)
-    bytes.addAll([0x1B, 0x61, 0x01]); // Center
-    bytes.addAll([0x1B, 0x45, 0x01]); // Bold
-    bytes.addAll([0x1D, 0x21, 0x11]); // Double Height & Width
+    bytes.addAll([0x1B, 0x61, 0x01]); 
+    bytes.addAll([0x1B, 0x45, 0x01]); 
+    bytes.addAll([0x1D, 0x21, 0x11]); 
     bytes.addAll("20 MART\n\n".codeUnits);
-    
-    // Normal Text Size
     bytes.addAll([0x1D, 0x21, 0x00]); 
-    bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+    bytes.addAll([0x1B, 0x45, 0x00]); 
     bytes.addAll("Date: ${DateTime.now().toString().substring(0, 16)}\n".codeUnits);
-    
-    bytes.addAll([0x1B, 0x61, 0x00]); // Left Align
+    bytes.addAll([0x1B, 0x61, 0x00]); 
     bytes.addAll("--------------------------------\n".codeUnits);
     
     for (var item in _cart) {
       String nameLine = "${item.product.name} x${item.quantity}";
       String priceLine = "Rs ${(item.product.price * item.quantity).toStringAsFixed(2)}";
-      
-      // Basic padding to align right (assume 32 chars width for 58mm)
       int paddingSize = 32 - nameLine.length - priceLine.length;
       if (paddingSize < 1) paddingSize = 1;
       String padding = " " * paddingSize;
-      
       bytes.addAll("$nameLine$padding$priceLine\n".codeUnits);
     }
     
     bytes.addAll("--------------------------------\n".codeUnits);
-    
-    // Total
-    bytes.addAll([0x1B, 0x45, 0x01]); // Bold
+    bytes.addAll([0x1B, 0x45, 0x01]); 
     String totalTitle = "TOTAL";
     String totalValue = "Rs ${_totalAmount.toStringAsFixed(2)}";
     int pad1 = 32 - totalTitle.length - totalValue.length;
     bytes.addAll("$totalTitle${" " * (pad1 > 0 ? pad1 : 1)}$totalValue\n".codeUnits);
-    bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
-    
-    // Method
+    bytes.addAll([0x1B, 0x45, 0x00]); 
     String methodTitle = "METHOD";
     int pad2 = 32 - methodTitle.length - method.length;
     bytes.addAll("$methodTitle${" " * (pad2 > 0 ? pad2 : 1)}$method\n".codeUnits);
-    
     bytes.addAll("--------------------------------\n".codeUnits);
-    
-    // Footer
-    bytes.addAll([0x1B, 0x61, 0x01]); // Center
-    bytes.addAll([0x1B, 0x45, 0x01]); // Bold
+    bytes.addAll([0x1B, 0x61, 0x01]); 
+    bytes.addAll([0x1B, 0x45, 0x01]); 
     bytes.addAll("Thank You!\n".codeUnits);
-    bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+    bytes.addAll([0x1B, 0x45, 0x00]); 
     bytes.addAll("Please visit again\n\n\n\n".codeUnits);
-    
-    // Cut Paper (Standard ESC/POS full cut)
     bytes.addAll([0x1D, 0x56, 0x41, 0x00]);
-    
     return bytes;
   }
 
   Future<void> _printReceipt(String method) async {
     if (widget.selectedPrinter == null) {
       debugPrint("No printer selected. Skipping print.");
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No printer configured. Go to Settings.'), backgroundColor: Colors.red)
-        );
-      }
       return;
     }
 
@@ -713,7 +962,7 @@ class _PosScreenState extends State<PosScreen> {
           isBle: false,
         );
       } else {
-        throw Exception("Network printers not implemented in this snippet");
+        return;
       }
 
       await printerManager.connect(type: type, model: inputParams);
@@ -721,245 +970,400 @@ class _PosScreenState extends State<PosScreen> {
       List<int> receiptBytes = await _generateReceiptBytes(method);
       await printerManager.send(type: type, bytes: receiptBytes);
       
-      // Slight delay to ensure buffer is sent
       await Future.delayed(const Duration(milliseconds: 500));
       
       await printerManager.disconnect(type: type);
 
     } catch (e) {
       debugPrint('Raw Print Error: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Print Failed! $e'), backgroundColor: Colors.red)
-        );
-      }
     }
-  }
-
-  void _logout() {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Logged out!')));
-  }
-
-  Widget _buildQuantityButton({
-    required IconData icon,
-    required Color color,
-    required Color iconColor,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: color,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Icon(icon, color: iconColor, size: 28),
-      ),
-    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey.shade100,
+      backgroundColor: const Color(0xFFF5F7FA), // Premium light gray background
       appBar: AppBar(
-        title: const Text(
-          '20 MART',
-          style: TextStyle(fontWeight: FontWeight.w600),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(Icons.storefront, color: Theme.of(context).colorScheme.primary),
+            ),
+            const SizedBox(width: 12),
+            const Text(
+              '20 MART POS',
+              style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: -0.5),
+            ),
+          ],
         ),
         centerTitle: false,
         elevation: 0,
         backgroundColor: Colors.white,
         foregroundColor: Colors.black87,
+        shadowColor: Colors.black.withOpacity(0.05),
+        surfaceTintColor: Colors.transparent,
         actions: [
           Center(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16.0),
-              child: Text(
-                _userId,
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                ),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+              margin: const EdgeInsets.only(right: 16),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.grey.shade300),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.person_outline, size: 18, color: Colors.black54),
+                  const SizedBox(width: 6),
+                  Text(
+                    _userId,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                      color: Colors.black87,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
-          IconButton(
-            icon: const Icon(Icons.logout, color: Colors.redAccent),
-            tooltip: 'Logout',
-            onPressed: _logout,
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 8),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: IconButton(
+              icon: Icon(_isCartVisible ? Icons.fullscreen : Icons.shopping_cart, color: Theme.of(context).colorScheme.primary),
+              tooltip: _isCartVisible ? 'Expand Products' : 'Show Cart',
+              onPressed: () {
+                setState(() {
+                  _isCartVisible = !_isCartVisible;
+                });
+              },
+            ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 12),
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.orange.shade50,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: IconButton(
+              icon: Icon(Icons.lock_clock, color: Colors.orange.shade800),
+              tooltip: 'Close Shift',
+              onPressed: () async {
+                final prefs = await SharedPreferences.getInstance();
+                final shiftId = prefs.getString('shift_id');
+                if (shiftId == null) return;
+                
+                double closingCash = 0;
+                final res = await showDialog<bool>(
+                  context: context,
+                  builder: (context) {
+                     final txt = TextEditingController();
+                     return AlertDialog(
+                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                       title: const Row(
+                         children: [
+                           Icon(Icons.lock_clock, color: Colors.orange),
+                           SizedBox(width: 8),
+                           Text('Close Shift', style: TextStyle(fontWeight: FontWeight.bold)),
+                         ],
+                       ),
+                       content: TextField(
+                         controller: txt,
+                         keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                         decoration: InputDecoration(
+                           labelText: 'Closing Cash Amount (Rs)',
+                           border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                           prefixIcon: const Icon(Icons.currency_rupee),
+                         ),
+                       ),
+                       actions: [
+                         TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+                         ElevatedButton(
+                           style: ElevatedButton.styleFrom(
+                             backgroundColor: Colors.orange,
+                             foregroundColor: Colors.white,
+                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))
+                           ),
+                           onPressed: () {
+                             closingCash = double.tryParse(txt.text) ?? 0;
+                             Navigator.pop(context, true);
+                           }, 
+                           child: const Text('Confirm Close')
+                         )
+                       ]
+                     );
+                  }
+                );
+                
+                if (res == true) {
+                  try {
+                    await ApiService().closeShift(shiftId, closingCash);
+                    await prefs.remove('shift_id'); // Only clear the shift, not the terminal/login
+                    if (mounted) {
+                      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const SplashLoader()));
+                    }
+                  } catch (e) {
+                    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString().replaceAll('Exception: ', ''))));
+                  }
+                }
+              },
+            ),
+          ),
+          const SizedBox(width: 12),
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.red.shade50,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: IconButton(
+              icon: Icon(Icons.logout, color: Colors.red.shade800),
+              tooltip: 'Logout',
+              onPressed: _logout,
+            ),
+          ),
+          const SizedBox(width: 16),
         ],
       ),
-      body: Center(
-        child: Container(
-          constraints: const BoxConstraints(maxWidth: 600),
-          margin: const EdgeInsets.all(16.0),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.05),
-                blurRadius: 10,
-                offset: const Offset(0, 5),
-              ),
-            ],
+      body: Row(
+        children: [
+          Expanded(
+            flex: _isCartVisible ? 9 : 14, 
+            child: _buildProductGrid(),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Padding(
-                padding: EdgeInsets.all(16.0),
-                child: Text(
-                  'Current Sale',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                ),
+          if (_isCartVisible)
+            Expanded(
+              flex: 5,
+              child: Container(
+              margin: const EdgeInsets.fromLTRB(0, 24, 24, 24),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(24),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.06),
+                    blurRadius: 20,
+                    offset: const Offset(0, 10),
+                  ),
+                ],
               ),
-              const Divider(height: 1),
-              Expanded(
-                child: ListView.separated(
-                  padding: const EdgeInsets.all(16.0),
-                  itemCount: _cart.length,
-                  separatorBuilder: (context, index) => const Divider(),
-                  itemBuilder: (context, index) {
-                    final item = _cart[index];
-                    return Row(
-                      children: [
-                        Expanded(
-                          flex: 3,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(24),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(24.0),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        border: Border(bottom: BorderSide(color: Colors.grey.shade100, width: 2)),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.blue.shade50,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Icon(Icons.shopping_cart_outlined, color: Colors.blue.shade700),
+                          ),
+                          const SizedBox(width: 12),
+                          const Text(
+                            'Current Order',
+                            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, letterSpacing: -0.5),
+                          ),
+                          const Spacer(),
+                          if (_cart.isNotEmpty)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.blue.shade600,
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: Text(
+                                '${_cart.length}',
+                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: _cart.isEmpty 
+                        ? Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.shopping_basket_outlined, size: 80, color: Colors.grey.shade200),
+                                const SizedBox(height: 16),
+                                Text("Cart is empty", style: TextStyle(fontSize: 18, color: Colors.grey.shade400, fontWeight: FontWeight.w600)),
+                              ],
+                            ),
+                          )
+                        : ListView.separated(
+                        padding: const EdgeInsets.all(20.0),
+                        itemCount: _cart.length,
+                        separatorBuilder: (context, index) => Divider(color: Colors.grey.shade100, height: 24),
+                        itemBuilder: (context, index) {
+                          final item = _cart[index];
+                          return Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
-                              Text(
-                                item.product.name,
-                                style: const TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold,
+                              Expanded(
+                                flex: 3,
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      item.product.name,
+                                      style: const TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w700,
+                                        color: Colors.black87,
+                                        height: 1.2
+                                      ),
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      '₹${item.product.price.toStringAsFixed(2)}',
+                                      style: TextStyle(color: Colors.grey.shade500, fontWeight: FontWeight.w600),
+                                    ),
+                                  ],
                                 ),
                               ),
-                              const SizedBox(height: 4),
-                              Text(
-                                '₹${item.product.price.toStringAsFixed(2)}',
-                                style: TextStyle(color: Colors.grey.shade700),
+                              Container(
+                                decoration: BoxDecoration(
+                                  border: Border.all(color: Colors.grey.shade200),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Row(
+                                  children: [
+                                    _buildQuantityButton(
+                                      icon: Icons.remove,
+                                      color: Colors.transparent,
+                                      iconColor: Colors.red.shade400,
+                                      onTap: () => _decrement(index),
+                                    ),
+                                    InkWell(
+                                      onTap: () => _showNumpadDialog(index),
+                                      child: Container(
+                                        width: 40,
+                                        alignment: Alignment.center,
+                                        child: Text(
+                                          '${item.quantity}',
+                                          style: const TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w800,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    _buildQuantityButton(
+                                      icon: Icons.add,
+                                      color: Colors.transparent,
+                                      iconColor: Theme.of(context).colorScheme.primary,
+                                      onTap: () => _increment(index),
+                                    ),
+                                  ],
+                                ),
                               ),
-                            ],
-                          ),
-                        ),
-                        Row(
-                          children: [
-                            _buildQuantityButton(
-                              icon: Icons.remove,
-                              color: Colors.red.shade50,
-                              iconColor: Colors.red.shade600,
-                              onTap: () => _decrement(index),
-                            ),
-                            InkWell(
-                              onTap: () => _showNumpadDialog(index),
-                              borderRadius: BorderRadius.circular(4),
-                              child: Container(
-                                width: 50,
-                                alignment: Alignment.center,
-                                padding: const EdgeInsets.symmetric(vertical: 8),
+                              SizedBox(
+                                width: 85,
                                 child: Text(
-                                  '${item.quantity}',
+                                  '₹${(item.product.price * item.quantity).toStringAsFixed(2)}',
+                                  textAlign: TextAlign.right,
                                   style: const TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w800,
                                   ),
                                 ),
                               ),
-                            ),
-                            _buildQuantityButton(
-                              icon: Icons.add,
-                              color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
-                              iconColor: Theme.of(context).colorScheme.primary,
-                              onTap: () => _increment(index),
-                            ),
-                          ],
-                        ),
-                        SizedBox(
-                          width: 80,
-                          child: Text(
-                            '₹${(item.product.price * item.quantity).toStringAsFixed(2)}',
-                            textAlign: TextAlign.right,
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                      ],
-                    );
-                  },
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade50,
-                  borderRadius: const BorderRadius.vertical(
-                    bottom: Radius.circular(12),
-                  ),
-                  border: Border(top: BorderSide(color: Colors.grey.shade200)),
-                ),
-                child: Column(
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text(
-                          'Total Amount',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        Text(
-                          '₹${_totalAmount.toStringAsFixed(2)}',
-                          style: const TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                      ],
+                            ],
+                          );
+                        },
+                      ),
                     ),
-                    const SizedBox(height: 20),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 56,
-                      child: ElevatedButton(
-                        onPressed: _checkout,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Theme.of(
-                            context,
-                          ).colorScheme.primary,
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
+                    Container(
+                      padding: const EdgeInsets.all(24),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade50,
+                        border: Border(top: BorderSide(color: Colors.grey.shade200)),
+                      ),
+                      child: Column(
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                'Total Amount',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.grey.shade600,
+                                ),
+                              ),
+                              Text(
+                                '₹${_totalAmount.toStringAsFixed(2)}',
+                                style: const TextStyle(
+                                  fontSize: 32,
+                                  fontWeight: FontWeight.w900,
+                                  letterSpacing: -1,
+                                ),
+                              ),
+                            ],
                           ),
-                          elevation: 0,
-                        ),
-                        child: const Text(
-                          'Save & Pay',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
+                          const SizedBox(height: 24),
+                          SizedBox(
+                            width: double.infinity,
+                            height: 64,
+                            child: ElevatedButton(
+                              onPressed: _cart.isEmpty ? null : _checkout,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Theme.of(context).colorScheme.primary,
+                                foregroundColor: Colors.white,
+                                disabledBackgroundColor: Colors.grey.shade300,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                elevation: 0,
+                              ),
+                              child: const Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Text(
+                                    'Checkout',
+                                    style: TextStyle(
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                  SizedBox(width: 8),
+                                  Icon(Icons.arrow_forward_rounded)
+                                ],
+                              ),
+                            ),
                           ),
-                        ),
+                        ],
                       ),
                     ),
                   ],
                 ),
               ),
-            ],
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -1300,6 +1704,282 @@ class _SettingsTabState extends State<SettingsTab> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class LoginScreen extends StatefulWidget {
+  const LoginScreen({super.key});
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+  bool _isLoading = false;
+
+  void _login() async {
+    setState(() => _isLoading = true);
+    try {
+      await ApiService().login(_emailController.text, _passwordController.text);
+      if (mounted) {
+        Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const SplashLoader()));
+      }
+    } catch(e) {
+      setState(() => _isLoading = false);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.grey.shade100,
+      body: Center(
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 400),
+          padding: const EdgeInsets.all(32),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.05),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.storefront,
+                  size: 64,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+              ),
+              const SizedBox(height: 24),
+              const Text(
+                '20 MART POS',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -1,
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Enter your credentials to login',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.black54,
+                  fontSize: 16,
+                ),
+              ),
+              const SizedBox(height: 32),
+              TextField(
+                controller: _emailController,
+                decoration: InputDecoration(
+                  labelText: 'Email',
+                  prefixIcon: const Icon(Icons.email_outlined),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _passwordController,
+                obscureText: true,
+                decoration: InputDecoration(
+                  labelText: 'Password',
+                  prefixIcon: const Icon(Icons.lock_outline),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 32),
+              SizedBox(
+                height: 56,
+                child: ElevatedButton(
+                  onPressed: _isLoading ? null : _login,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Theme.of(context).colorScheme.primary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: _isLoading
+                      ? const CircularProgressIndicator(color: Colors.white)
+                      : const Text(
+                          'Login securely',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class SplashLoader extends StatefulWidget {
+  const SplashLoader({super.key});
+  @override
+  State<SplashLoader> createState() => _SplashLoaderState();
+}
+
+class _SplashLoaderState extends State<SplashLoader> {
+  @override
+  void initState() {
+    super.initState();
+    _checkStatus();
+  }
+
+  void _checkStatus() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('access_token');
+    if (token == null) {
+       if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LoginScreen()));
+       return;
+    }
+    
+    try {
+      final deviceId = await ApiService().getDeviceIdentifier();
+      try {
+        final terminal = await ApiService().checkTerminal(deviceId);
+        final terminalId = terminal['id'];
+        
+        final savedStore = prefs.getString('store_id');
+        if (savedStore == null || savedStore.isEmpty) {
+           if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => DeviceNotRegisteredScreen(deviceId: deviceId, existingTerminalId: terminalId)));
+           return;
+        }
+
+        final storeId = terminal['store_id'] ?? savedStore;
+        await prefs.setString('terminal_id', terminalId);
+        await prefs.setString('store_id', storeId);
+
+        try {
+          final fyId = await ApiService().getActiveFinancialYear();
+          await prefs.setString('financial_year_id', fyId);
+        } catch (e) {
+           // Handle missing financial year if needed
+        }
+
+        final shift = await ApiService().getActiveShift(terminalId);
+        if (shift != null) {
+          await prefs.setString('shift_id', shift['id']);
+          if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => MainHome(openingBalance: (shift['opening_cash'] ?? 0.0).toDouble())));
+        } else {
+          if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const OpeningBalanceScreen()));
+        }
+      } catch (e) {
+        if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => DeviceNotRegisteredScreen(deviceId: deviceId)));
+      }
+    } catch(e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(body: Center(child: CircularProgressIndicator()));
+  }
+}
+
+class DeviceNotRegisteredScreen extends StatefulWidget {
+  final String deviceId;
+  final String? existingTerminalId;
+
+  const DeviceNotRegisteredScreen({super.key, required this.deviceId, this.existingTerminalId});
+  @override
+  State<DeviceNotRegisteredScreen> createState() => _DeviceNotRegisteredScreenState();
+}
+
+class _DeviceNotRegisteredScreenState extends State<DeviceNotRegisteredScreen> {
+  List<dynamic> _stores = [];
+  String? _selectedStore;
+  bool _isLoading = true;
+  bool _isCartVisible = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchStores();
+  }
+
+  void _fetchStores() async {
+    try {
+      final res = await ApiService().getStores();
+      setState(() {
+        _stores = res;
+        _isLoading = false;
+        if (_stores.isNotEmpty) _selectedStore = _stores[0]['id'];
+      });
+    } catch(e) {
+      setState(() => _isLoading = false);
+    }
+  }
+  
+  void _register() async {
+    if (_selectedStore == null) return;
+    try {
+      if (widget.existingTerminalId != null) {
+        await ApiService().updateTerminal(widget.existingTerminalId!, _selectedStore!, widget.deviceId);
+      } else {
+        await ApiService().registerTerminal(_selectedStore!, widget.deviceId);
+      }
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('store_id', _selectedStore!);
+      if (mounted) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const SplashLoader()),
+        );
+      }
+    } catch(e) {
+       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    return Scaffold(
+      appBar: AppBar(title: const Text('Register Terminal')),
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Select Store:'),
+            DropdownButton<String>(
+              value: _selectedStore,
+              items: _stores.map<DropdownMenuItem<String>>((s) => DropdownMenuItem<String>(value: s['id'], child: Text(s['store_name'] ?? s['name'] ?? 'Unknown Store'))).toList(),
+              onChanged: (v) => setState(() => _selectedStore = v),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton(onPressed: _register, child: const Text('Register & Continue'))
+          ]
+        )
+      )
     );
   }
 }

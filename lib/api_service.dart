@@ -1,0 +1,196 @@
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
+
+class ApiService {
+  static const String baseUrl = 'http://192.168.1.150:8080/api/v1'; // Local network IP
+
+  Future<Map<String, String>> getAuthHeaders() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('access_token') ?? '';
+    return {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer $token',
+    };
+  }
+
+  Future<String> getDeviceIdentifier() async {
+    final prefs = await SharedPreferences.getInstance();
+    String? deviceId = prefs.getString('device_identifier');
+    if (deviceId == null) {
+      deviceId = const Uuid().v4();
+      await prefs.setString('device_identifier', deviceId);
+    }
+    return deviceId;
+  }
+
+  Future<Map<String, dynamic>> login(String email, String password) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/auth/login'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'email': email, 'password': password}),
+    );
+    if (res.statusCode == 200) {
+      final data = jsonDecode(res.body)['data'];
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('access_token', data['token']['access_token']);
+      await prefs.setString('user_id', data['user']['id']);
+      await prefs.setString('company_id', data['user']['company_id']);
+      return data;
+    }
+    throw Exception(_extractError(res.body));
+  }
+
+  Future<Map<String, dynamic>> checkTerminal(String deviceId) async {
+    final res = await http.get(
+      Uri.parse('$baseUrl/terminals/device/$deviceId'),
+      headers: await getAuthHeaders(),
+    );
+    if (res.statusCode == 200) {
+      return jsonDecode(res.body)['data'];
+    }
+    throw Exception(_extractError(res.body));
+  }
+
+  Future<Map<String, dynamic>?> getActiveShift(String terminalId) async {
+    final res = await http.get(
+      Uri.parse('$baseUrl/shifts/terminal/$terminalId/open'),
+      headers: await getAuthHeaders(),
+    );
+    if (res.statusCode == 200) {
+      final decoded = jsonDecode(res.body);
+      return decoded['data'];
+    }
+    return null;
+  }
+
+  Future<Map<String, dynamic>> openShift(String storeId, String terminalId, double openingCash) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/shifts/open'),
+      headers: await getAuthHeaders(),
+      body: jsonEncode({
+        'store_id': storeId,
+        'terminal_id': terminalId,
+        'opening_cash': openingCash,
+        'opening_remarks': 'Flutter POS Start',
+      }),
+    );
+    if (res.statusCode == 200 || res.statusCode == 201) {
+      return jsonDecode(res.body)['data'];
+    }
+    throw Exception(_extractError(res.body));
+  }
+
+  Future<dynamic> getProducts({int page = 1, int limit = 100}) async {
+    final prefs = await SharedPreferences.getInstance();
+    final storeId = prefs.getString('store_id') ?? '';
+    final res = await http.get(
+      Uri.parse('$baseUrl/pos/products/search?store_id=$storeId&page=$page&limit=$limit'),
+      headers: await getAuthHeaders(),
+    );
+    if (res.statusCode == 200) {
+      return jsonDecode(res.body)['data'];
+    }
+    throw Exception(_extractError(res.body));
+  }
+
+  Future<bool> postSale(Map<String, dynamic> saleData) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/sales/'),
+      headers: await getAuthHeaders(),
+      body: jsonEncode(saleData),
+    );
+    if (res.statusCode == 200 || res.statusCode == 201) {
+      return true;
+    }
+    throw Exception(_extractError(res.body));
+  }
+
+  String _extractError(String body) {
+    try {
+      final decoded = jsonDecode(body);
+      if (decoded['error'] != null) {
+        if (decoded['error'] is Map) {
+          return decoded['error']['message'] ?? decoded['error'].toString();
+        }
+        return decoded['error'].toString();
+      }
+      if (decoded['message'] != null) return decoded['message'].toString();
+      return body;
+    } catch (e) {
+      return body;
+    }
+  }
+  Future<List<dynamic>> getStores() async {
+    final res = await http.get(
+      Uri.parse('$baseUrl/stores'),
+      headers: await getAuthHeaders(),
+    );
+    if (res.statusCode == 200) {
+      return jsonDecode(res.body)['data'];
+    }
+    throw Exception(_extractError(res.body));
+  }
+
+  Future<String> getActiveFinancialYear() async {
+    final res = await http.get(
+      Uri.parse('$baseUrl/financial-years'),
+      headers: await getAuthHeaders(),
+    );
+    if (res.statusCode == 200) {
+      final data = jsonDecode(res.body)['data'] as List;
+      for (var fy in data) {
+        if (fy['is_current'] == true) {
+          return fy['id'];
+        }
+      }
+    }
+    throw Exception('No active financial year found');
+  }
+
+  Future<void> registerTerminal(String storeId, String deviceId) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/terminals'),
+      headers: await getAuthHeaders(),
+      body: jsonEncode({
+        "store_id": storeId,
+        "terminal_code": "POS-${deviceId.substring(0,6)}",
+        "terminal_name": "Tablet ${deviceId.substring(0,6)}",
+        "device_identifier": deviceId,
+        "terminal_status": "active"
+      }),
+    );
+    if (res.statusCode != 200 && res.statusCode != 201) {
+      throw Exception(_extractError(res.body));
+    }
+  }
+  Future<void> closeShift(String shiftId, double closingCash) async {
+    final res = await http.post(
+      Uri.parse('$baseUrl/shifts/$shiftId/close'),
+      headers: await getAuthHeaders(),
+      body: jsonEncode({
+        "closing_cash": closingCash,
+      }),
+    );
+    if (res.statusCode != 200 && res.statusCode != 201) {
+      throw Exception(_extractError(res.body));
+    }
+  }
+  Future<void> updateTerminal(String terminalId, String storeId, String deviceId) async {
+    final res = await http.put(
+      Uri.parse('$baseUrl/terminals/$terminalId'),
+      headers: await getAuthHeaders(),
+      body: jsonEncode({
+        "store_id": storeId,
+        "terminal_code": "POS-${deviceId.substring(0,6)}",
+        "terminal_name": "Tablet ${deviceId.substring(0,6)}",
+        "device_identifier": deviceId,
+        "terminal_status": "active"
+      }),
+    );
+    if (res.statusCode != 200 && res.statusCode != 201) {
+      throw Exception(_extractError(res.body));
+    }
+  }
+}
