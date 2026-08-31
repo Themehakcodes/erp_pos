@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
@@ -36,6 +37,7 @@ class ApiService {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('access_token', data['token']['access_token']);
       await prefs.setString('user_id', data['user']['id']);
+      await prefs.setString('user_name', data['user']['name'] ?? 'Cashier');
       await prefs.setString('company_id', data['user']['company_id']);
       return data;
     }
@@ -53,6 +55,16 @@ class ApiService {
     throw Exception(_extractError(res.body));
   }
 
+  Future<void> heartbeat() async {
+    try {
+      await http.post(
+        Uri.parse('$baseUrl/auth/heartbeat'),
+        headers: await getAuthHeaders(),
+      );
+      await syncOfflineSales();
+    } catch (_) {}
+  }
+
   Future<Map<String, dynamic>?> getActiveShift(String terminalId) async {
     final res = await http.get(
       Uri.parse('$baseUrl/shifts/terminal/$terminalId/open'),
@@ -61,6 +73,9 @@ class ApiService {
     if (res.statusCode == 200) {
       final decoded = jsonDecode(res.body);
       return decoded['data'];
+    }
+    if (res.statusCode == 401) {
+      throw Exception('Session expired');
     }
     return null;
   }
@@ -95,16 +110,65 @@ class ApiService {
     throw Exception(_extractError(res.body));
   }
 
-  Future<bool> postSale(Map<String, dynamic> saleData) async {
-    final res = await http.post(
-      Uri.parse('$baseUrl/sales/'),
-      headers: await getAuthHeaders(),
-      body: jsonEncode(saleData),
-    );
-    if (res.statusCode == 200 || res.statusCode == 201) {
-      return true;
+  // Returns the backend invoice_no (e.g. 'SI-00042') or null if offline
+  Future<String?> postSale(Map<String, dynamic> saleData) async {
+    try {
+      final res = await http.post(
+        Uri.parse('$baseUrl/sales/'),
+        headers: await getAuthHeaders(),
+        body: jsonEncode(saleData),
+      ).timeout(const Duration(seconds: 10));
+      
+      if (res.statusCode == 200 || res.statusCode == 201) {
+        try {
+          final body = jsonDecode(res.body);
+          final data = body['data'];
+          return data['invoice_no']?.toString() ??
+                 data['invoice_number']?.toString();
+        } catch (_) {
+          return null;
+        }
+      }
+      throw Exception(_extractError(res.body));
+    } catch (e) {
+      if (e is TimeoutException || e.toString().contains('SocketException') || e.toString().contains('Failed host lookup')) {
+        await _saveSaleOffline(saleData);
+        return null; // offline - no invoice_no yet
+      }
+      throw Exception(e.toString());
     }
-    throw Exception(_extractError(res.body));
+  }
+
+  Future<void> _saveSaleOffline(Map<String, dynamic> saleData) async {
+    final prefs = await SharedPreferences.getInstance();
+    final offlineSales = prefs.getStringList('offline_sales') ?? [];
+    offlineSales.add(jsonEncode(saleData));
+    await prefs.setStringList('offline_sales', offlineSales);
+  }
+
+  Future<void> syncOfflineSales() async {
+    final prefs = await SharedPreferences.getInstance();
+    final offlineSales = prefs.getStringList('offline_sales') ?? [];
+    if (offlineSales.isEmpty) return;
+
+    List<String> failedSales = [];
+    for (var saleStr in offlineSales) {
+      try {
+        final res = await http.post(
+          Uri.parse('$baseUrl/sales/'),
+          headers: await getAuthHeaders(),
+          body: saleStr,
+        ).timeout(const Duration(seconds: 15));
+        
+        if (res.statusCode != 200 && res.statusCode != 201) {
+          failedSales.add(saleStr);
+        }
+      } catch (e) {
+        failedSales.add(saleStr);
+      }
+    }
+    
+    await prefs.setStringList('offline_sales', failedSales);
   }
 
   String _extractError(String body) {
@@ -192,5 +256,19 @@ class ApiService {
     if (res.statusCode != 200 && res.statusCode != 201) {
       throw Exception(_extractError(res.body));
     }
+  }
+
+  Future<List<dynamic>> getPaymentMethods() async {
+    final res = await http.get(
+      Uri.parse('$baseUrl/payment-methods'),
+      headers: await getAuthHeaders(),
+    );
+    if (res.statusCode == 200) {
+      final json = jsonDecode(res.body);
+      if (json['success'] == true && json['data'] != null) {
+        return json['data'];
+      }
+    }
+    return [];
   }
 }
