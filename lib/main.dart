@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'screens/splash_loader.dart';
+import 'api_service.dart';
 
 void main() async {
   // MUST be called before any Flutter binding or plugin usage
   WidgetsFlutterBinding.ensureInitialized();
+  await ApiService.initBaseUrl();
 
   runApp(const PosApp());
 }

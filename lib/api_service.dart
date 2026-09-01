@@ -5,9 +5,23 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 class ApiService {
-  static const String baseUrl = 'http://192.168.1.150:8080/api/v1';
+  static String baseUrl = 'http://192.168.1.150:8080/api/v1';
   // Default timeout for all network calls — prevents any hanging
   static const Duration _timeout = Duration(seconds: 30);
+
+  static Future<void> initBaseUrl() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString('api_base_url');
+    if (saved != null && saved.isNotEmpty) {
+      baseUrl = saved;
+    }
+  }
+
+  static Future<void> setBaseUrl(String url) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('api_base_url', url);
+    baseUrl = url;
+  }
 
   Future<Map<String, String>> getAuthHeaders() async {
     final prefs = await SharedPreferences.getInstance();
