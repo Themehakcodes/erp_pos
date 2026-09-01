@@ -3,6 +3,8 @@ import 'login_screen.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_pos_printer_platform_image_3/flutter_pos_printer_platform_image_3.dart';
+import 'package:nyx_printer_flutter/nyx_printer.dart';
+import 'package:nyx_printer_flutter/nyx_printer_definition.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:flutter/services.dart';
 import 'dart:io';
@@ -11,6 +13,7 @@ import 'dart:async';
 import 'dart:typed_data';
 import '../api_service.dart';
 import '../models/models.dart';
+import '../printer_helper.dart';
 
 class PosScreen extends StatefulWidget {
   final Function(String method, double amount) onSaleCompleted;
@@ -37,7 +40,11 @@ class _PosScreenState extends State<PosScreen> {
   bool _isCartVisible = true;
   String _userId = "Cashier";
   int _estCounter = 1;
+  bool _isProcessing = false; // guard against double-tap checkout
   bool _isBottomSheetOpen = false;
+
+  // Global hardware lock to prevent Bluetooth stack from crashing and lagging the app
+  static bool _isPrintingHardware = false;
 
   @override
   void initState() {
@@ -457,6 +464,7 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   void _checkout() {
+    if (_isProcessing) return; // block if already processing
     showDialog(
       context: context,
       builder: (context) {
@@ -472,6 +480,8 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   Future<void> _processSplitPayment(double cashAmount, double upiAmount) async {
+    if (_isProcessing) return; // prevent double-tap duplicate bills
+    setState(() => _isProcessing = true);
     final amountToCharge = _totalAmount;
 
     String method = '';
@@ -658,6 +668,8 @@ class _PosScreenState extends State<PosScreen> {
           ),
         );
       }
+    } finally {
+      if (mounted) setState(() => _isProcessing = false);
     }
   }
 
@@ -738,86 +750,115 @@ class _PosScreenState extends State<PosScreen> {
       return;
     }
 
-    // 1. If internal printer is explicitly selected
+    // 1. If internal printer is explicitly selected — Use the NYX AIDL service
     if (widget.selectedPrinter!.isInternal) {
+      // Wait for hardware instead of dropping the print job
+      while (_isPrintingHardware) {
+        await Future.delayed(const Duration(milliseconds: 300));
+      }
+      _isPrintingHardware = true;
       try {
-        final result = await _printerChannel.invokeMethod<bool>('printBytes', {
-          'bytes': bytes,
-        });
-        if (result == true) {
-          debugPrint(
-            'Printed via internal serial port (${bytes.length} bytes)',
-          );
-          return;
+        var ret = await NyxPrinter.getPrinterStatus();
+        if (ret == PrinterStatus.SDK_OK) {
+          
+          await NyxPrinter.printEscposData(bytes);
+          
+          debugPrint('Printed via NYX AIDL service (ESC/POS)');
         } else {
-          debugPrint('Internal printer failed to print (no valid port).');
+          debugPrint('NYX printer service not available.');
         }
       } catch (e) {
-        debugPrint('Internal printer error: $e');
+        debugPrint('NYX printer error: $e');
+      } finally {
+        _isPrintingHardware = false;
       }
       return; // Do not fallback to bluetooth if they explicitly chose Internal
     }
 
-    // 2. Otherwise, use selected Bluetooth or USB printer
-    try {
-      var printerManager = PrinterManager.instance;
-      final device = widget.selectedPrinter!.device!;
-      final type = widget.selectedPrinter!.type!;
-
-      var inputParams;
-      if (type == PrinterType.usb) {
-        inputParams = UsbPrinterInput(
-          name: device.name,
-          vendorId: device.vendorId,
-          productId: device.productId,
-        );
-      } else if (type == PrinterType.bluetooth) {
-        inputParams = BluetoothPrinterInput(
-          name: device.name,
-          address: device.address!,
-          isBle: false,
-          autoConnect: false,
-        );
-      } else {
-        return;
-      }
-
-      // Explicitly INITIALIZE fresh state right before printing (as requested)
-      try {
-        await printerManager.disconnect(type: type);
-      } catch (_) {}
-      await Future.delayed(
-        const Duration(milliseconds: 300),
-      ); // allow native thread to release
-
-      bool isConnected = false;
-      try {
-        final result = await printerManager.connect(
-          type: type,
-          model: inputParams,
-        );
-        isConnected = (result == true);
-      } catch (e) {
-        debugPrint('Connection exception: $e');
-      }
-
-      if (isConnected) {
-        await printerManager.send(type: type, bytes: receiptBytes);
-        // Wait for physical print buffer to clear
-        await Future.delayed(const Duration(seconds: 3));
-      } else {
-        debugPrint('Failed to initialize connection to printer.');
-      }
-
-      // Always clean up after
-      try {
-        await printerManager.disconnect(type: type);
-      } catch (_) {}
-
-      debugPrint('Finished Bluetooth/USB print cycle.');
-    } catch (e) {
-      debugPrint('Bluetooth/USB print error: $e');
+    // 2. Bluetooth/USB
+    final selectedPrinter = widget.selectedPrinter!;
+    
+    // Prevent overlapping BT connections which permanently freeze the Android BT stack
+    while (_isPrintingHardware) {
+      await Future.delayed(const Duration(milliseconds: 300));
     }
+    _isPrintingHardware = true;
+
+    unawaited(
+      Future(() async {
+        try {
+          var printerManager = PrinterManager.instance;
+          final device = selectedPrinter.device!;
+          final type = selectedPrinter.type!;
+
+          dynamic inputParams;
+          if (type == PrinterType.usb) {
+            inputParams = UsbPrinterInput(
+              name: device.name,
+              vendorId: device.vendorId,
+              productId: device.productId,
+            );
+          } else if (type == PrinterType.bluetooth) {
+            inputParams = BluetoothPrinterInput(
+              name: device.name,
+              address: device.address!,
+              isBle: false,
+              autoConnect: false,
+            );
+          } else {
+            _isPrintingHardware = false;
+            return;
+          }
+
+          // Clean disconnect before fresh connect
+          try { await printerManager.disconnect(type: type); } catch (_) {}
+          await Future.delayed(const Duration(milliseconds: 200));
+
+          bool isConnected = false;
+          try {
+            isConnected = (await printerManager.connect(
+              type: type,
+              model: inputParams,
+            ).timeout(const Duration(seconds: 8))) == true;
+          } catch (e) {
+            debugPrint('BT connect timeout/error: $e');
+          }
+
+          if (isConnected) {
+            await printerManager.send(type: type, bytes: receiptBytes)
+              .timeout(const Duration(seconds: 10));
+            debugPrint('BT/USB print sent successfully.');
+          } else {
+            debugPrint('Failed to connect to BT/USB printer.');
+          }
+          
+          // ALWAYS clean disconnect after printing to prevent the Android 
+          // Bluetooth SPP socket from hanging on the next print attempt.
+          try {
+            await PrinterManager.instance.disconnect(type: type);
+          } catch (_) {}
+          
+          // Release hardware lock on success
+          _isPrintingHardware = false;
+        } catch (e) {
+          debugPrint('BT/USB print isolate error: $e');
+          // Always clean up
+          try {
+            await PrinterManager.instance.disconnect(
+              type: selectedPrinter.type!,
+            );
+          } catch (_) {}
+          _isPrintingHardware = false; // Release hardware lock
+        }
+      }).timeout(
+        const Duration(seconds: 20),
+        onTimeout: () {
+          debugPrint('PRINT TIMEOUT: Entire BT print job exceeded 20s, killed.');
+          try { PrinterManager.instance.disconnect(type: selectedPrinter.type!); } catch (_) {}
+          _isPrintingHardware = false; // Release hardware lock
+        },
+      ),
+    );
   }
 
   @override
@@ -995,6 +1036,14 @@ class _PosScreenState extends State<PosScreen> {
                 if (res == true) {
                   try {
                     await ApiService().closeShift(shiftId, closingCash);
+                    try {
+                      final prefs = await SharedPreferences.getInstance();
+                      final storeId = prefs.getString('store_id') ?? '';
+                      final terminalId = prefs.getString('terminal_id') ?? '';
+                      await PrinterHelper.printShiftReceipt(widget.selectedPrinter, false, closingCash, storeId, terminalId);
+                    } catch (e) {
+                      debugPrint('Error printing close receipt: $e');
+                    }
                     _logout();
                   } catch (e) {
                     if (mounted)

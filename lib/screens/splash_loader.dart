@@ -1,23 +1,11 @@
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../api_service.dart';
 import 'main_home.dart';
-import 'pos_screen.dart';
-import 'sales_screen.dart';
-import 'settings_tab.dart';
 import 'login_screen.dart';
 import 'splash_loader.dart';
 import 'device_not_registered_screen.dart';
 import 'opening_balance_screen.dart';
-import 'package:flutter/material.dart';
-
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:flutter_pos_printer_platform_image_3/flutter_pos_printer_platform_image_3.dart';
-import 'package:qr_flutter/qr_flutter.dart';
-import 'dart:io';
-import 'dart:convert';
-import 'dart:async';
-import '../api_service.dart';
-import '../models/models.dart';
-import 'package:flutter/material.dart';
 
 class SplashLoader extends StatefulWidget {
   const SplashLoader({super.key});
@@ -26,6 +14,9 @@ class SplashLoader extends StatefulWidget {
 }
 
 class _SplashLoaderState extends State<SplashLoader> {
+  bool _hasError = false;
+  String _errorMsg = "";
+
   @override
   void initState() {
     super.initState();
@@ -33,6 +24,11 @@ class _SplashLoaderState extends State<SplashLoader> {
   }
 
   void _checkStatus() async {
+    setState(() {
+      _hasError = false;
+      _errorMsg = "";
+    });
+
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('access_token');
     if (token == null) {
@@ -71,33 +67,83 @@ class _SplashLoaderState extends State<SplashLoader> {
           if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const OpeningBalanceScreen()));
         }
       } catch (e) {
-        if (e.toString().contains('Session expired') || e.toString().contains('Unauthorized') || e.toString().contains('revoked')) {
+        // Auth/session errors → go to login
+        final errStr = e.toString();
+        if (errStr.contains('Session expired') || errStr.contains('Unauthorized') || errStr.contains('revoked') || errStr.contains('401')) {
           await prefs.remove('access_token');
           if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LoginScreen()));
           return;
         }
         
+        // If we have a saved shift, go offline mode
         final offlineShiftId = prefs.getString('shift_id');
         if (offlineShiftId != null) {
            if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => MainHome(openingBalance: 0.0)));
            return;
         }
         
+        // Network/timeout errors → show retry screen
+        if (errStr.contains('TimeoutException') || errStr.contains('SocketException') || errStr.contains('Failed host lookup') || errStr.contains('Connection refused')) {
+          throw e; // Goes to outer catch → shows retry screen
+        }
+        
+        // Any other error (terminal not found, 404, not registered, etc.) → register device
         if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => DeviceNotRegisteredScreen(deviceId: deviceId)));
+        return;
       }
     } catch(e) {
       final offlineShiftId = prefs.getString('shift_id');
       if (offlineShiftId != null) {
-         final prefs = await SharedPreferences.getInstance(); // Ensure prefs is available
          if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => MainHome(openingBalance: 0.0)));
          return;
       }
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      
+      if (mounted) {
+        setState(() {
+          _hasError = true;
+          _errorMsg = e.toString().replaceAll("Exception: ", "");
+        });
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_hasError) {
+      return Scaffold(
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.wifi_off, size: 64, color: Colors.grey),
+                const SizedBox(height: 16),
+                const Text(
+                  'Connection Error',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _errorMsg,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.redAccent),
+                ),
+                const SizedBox(height: 24),
+                ElevatedButton.icon(
+                  onPressed: _checkStatus,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Retry'),
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
     return const Scaffold(body: Center(child: CircularProgressIndicator()));
   }
 }

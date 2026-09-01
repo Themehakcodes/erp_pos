@@ -248,6 +248,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.5.0"
+  nyx_printer_flutter:
+    dependency: "direct main"
+    description:
+      name: nyx_printer_flutter
+      sha256: a48cac67b0305b520ee1b8c7f52cbfdafd5a33c28fa81b83acab14997c411ded
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.0.2"
   path:
     dependency: transitive
     description:

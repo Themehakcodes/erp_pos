@@ -1,23 +1,13 @@
-import 'main_home.dart';
-import 'pos_screen.dart';
-import 'sales_screen.dart';
-import 'settings_tab.dart';
-import 'login_screen.dart';
-import 'splash_loader.dart';
-import 'device_not_registered_screen.dart';
-import 'opening_balance_screen.dart';
 import 'package:flutter/material.dart';
-
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_pos_printer_platform_image_3/flutter_pos_printer_platform_image_3.dart';
-import 'package:qr_flutter/qr_flutter.dart';
-import 'dart:io';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'dart:async';
 import '../api_service.dart';
 import '../models/models.dart';
-import 'package:flutter/material.dart';
+import 'pos_screen.dart';
+import 'sales_screen.dart';
+import 'settings_tab.dart';
 
 class MainHome extends StatefulWidget {
   final double openingBalance;
@@ -28,7 +18,7 @@ class MainHome extends StatefulWidget {
   State<MainHome> createState() => _MainHomeState();
 }
 
-class _MainHomeState extends State<MainHome> {
+class _MainHomeState extends State<MainHome> with WidgetsBindingObserver {
   int _currentIndex = 0;
 
   late double _totalCash;
@@ -41,15 +31,35 @@ class _MainHomeState extends State<MainHome> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _totalCash = widget.openingBalance;
     _loadPrinter();
+    _startHeartbeat();
+  }
+
+  void _startHeartbeat() {
+    _heartbeatTimer?.cancel();
     _heartbeatTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       Future.microtask(() => ApiService().heartbeat());
     });
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _startHeartbeat();
+      ApiService().heartbeat();
+    } else if (state == AppLifecycleState.paused) {
+      _heartbeatTimer?.cancel();
+      // Removed automatic Bluetooth disconnect on pause because some custom
+      // POS Android ROMs aggressively fire 'paused' during simple tab or focus changes,
+      // which was killing the printer connection.
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _heartbeatTimer?.cancel();
     super.dispose();
   }
@@ -94,9 +104,6 @@ class _MainHomeState extends State<MainHome> {
     }
   }
 
-  bool _salesVisited = false;
-  bool _settingsVisited = false;
-
   @override
   Widget build(BuildContext context) {
     if (_isLoadingPrinter) {
@@ -104,55 +111,78 @@ class _MainHomeState extends State<MainHome> {
     }
 
     return Scaffold(
-      body: Stack(
-        children: [
-          Offstage(
-            offstage: _currentIndex != 0,
-            child: PosScreen(
-              onSaleCompleted: _recordSale,
-              selectedPrinter: _selectedPrinter,
+      drawer: Drawer(
+        child: ListView(
+          padding: EdgeInsets.zero,
+          children: [
+            DrawerHeader(
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              child: const Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  Icon(Icons.storefront, size: 48, color: Colors.white),
+                  SizedBox(height: 16),
+                  Text(
+                    'ERP POS System',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-          Offstage(
-            offstage: _currentIndex != 1,
-            child: _salesVisited ? SalesScreen(
-              openingBalance: widget.openingBalance,
-              totalCash: _totalCash,
-              totalUpi: _totalUpi,
-            ) : const SizedBox(),
-          ),
-          Offstage(
-            offstage: _currentIndex != 2,
-            child: _settingsVisited ? SettingsTab(
-              currentPrinter: _selectedPrinter,
-              onPrinterSelected: _setPrinter,
-            ) : const SizedBox(),
-          ),
-        ],
+            ListTile(
+              leading: const Icon(Icons.point_of_sale, color: Colors.black87),
+              title: const Text('POS Terminal', style: TextStyle(fontWeight: FontWeight.bold)),
+              onTap: () {
+                Navigator.pop(context); // Close drawer
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.bar_chart, color: Colors.black87),
+              title: const Text('Sales Report', style: TextStyle(fontWeight: FontWeight.bold)),
+              onTap: () {
+                Navigator.pop(context); // Close drawer
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => SalesScreen(
+                      openingBalance: widget.openingBalance,
+                      totalCash: _totalCash,
+                      totalUpi: _totalUpi,
+                    ),
+                  ),
+                );
+              },
+            ),
+            const Divider(),
+            ListTile(
+              leading: const Icon(Icons.settings, color: Colors.black87),
+              title: const Text('Settings', style: TextStyle(fontWeight: FontWeight.bold)),
+              onTap: () {
+                Navigator.pop(context); // Close drawer
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => SettingsTab(
+                      currentPrinter: _selectedPrinter,
+                      onPrinterSelected: _setPrinter,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
       ),
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _currentIndex,
-        onTap: (index) {
-          setState(() {
-            _currentIndex = index;
-            if (index == 1) _salesVisited = true;
-            if (index == 2) _settingsVisited = true;
-          });
-        },
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.point_of_sale),
-            label: 'POS',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.bar_chart),
-            label: 'Sales',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.settings),
-            label: 'Settings',
-          ),
-        ],
+      body: PosScreen(
+        onSaleCompleted: _recordSale,
+        selectedPrinter: _selectedPrinter,
       ),
     );
   }

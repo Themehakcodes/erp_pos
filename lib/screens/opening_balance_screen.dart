@@ -1,23 +1,13 @@
-import 'main_home.dart';
-import 'pos_screen.dart';
-import 'sales_screen.dart';
-import 'settings_tab.dart';
-import 'login_screen.dart';
-import 'splash_loader.dart';
-import 'device_not_registered_screen.dart';
-import 'opening_balance_screen.dart';
 import 'package:flutter/material.dart';
-
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:flutter_pos_printer_platform_image_3/flutter_pos_printer_platform_image_3.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 import 'dart:io';
 import 'dart:convert';
-import 'dart:async';
 import '../api_service.dart';
+import 'main_home.dart';
+import 'login_screen.dart';
 import '../models/models.dart';
-import 'package:flutter/material.dart';
+import '../printer_helper.dart';
 
 class OpeningBalanceScreen extends StatefulWidget {
   const OpeningBalanceScreen({super.key});
@@ -28,22 +18,11 @@ class OpeningBalanceScreen extends StatefulWidget {
 
 class _OpeningBalanceScreenState extends State<OpeningBalanceScreen> {
   String _amountStr = "";
+  bool _isSubmitting = false;
 
   @override
   void initState() {
     super.initState();
-    _requestPermissions();
-  }
-
-  Future<void> _requestPermissions() async {
-    if (Platform.isAndroid) {
-      await [
-        Permission.bluetooth,
-        Permission.bluetoothConnect,
-        Permission.bluetoothScan,
-        Permission.location,
-      ].request();
-    }
   }
 
   void _onKeyTap(String val) {
@@ -64,20 +43,63 @@ class _OpeningBalanceScreenState extends State<OpeningBalanceScreen> {
   }
 
   void _submit() async {
+    if (_isSubmitting) return;
+    setState(() => _isSubmitting = true);
+
     final balance = double.tryParse(_amountStr) ?? 0.0;
-    
+
     final prefs = await SharedPreferences.getInstance();
     final storeId = prefs.getString('store_id');
     final terminalId = prefs.getString('terminal_id');
-    
+
     if (storeId == null || terminalId == null) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Device not registered. Please restart app.')));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Device not registered. Please restart app.')),
+        );
+      }
+      setState(() => _isSubmitting = false);
       return;
     }
-    
+
     try {
+      // STEP 1: Always check if a shift is already open for this terminal — same logic as web POS
+      final existingShift = await ApiService().getActiveShift(terminalId);
+      if (existingShift != null) {
+        // Resume existing shift — do NOT create a new one
+        await prefs.setString('shift_id', existingShift['id']);
+        final openingCash = double.tryParse(existingShift['opening_cash'].toString()) ?? 0.0;
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Resuming existing open shift...'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => MainHome(openingBalance: openingCash)),
+          );
+        }
+        return;
+      }
+
+      // STEP 2: No existing shift — open a fresh one
       final shift = await ApiService().openShift(storeId, terminalId, balance);
       await prefs.setString('shift_id', shift['id']);
+      
+      // Print Opening Receipt
+      try {
+        final savedData = prefs.getString('saved_printer');
+        if (savedData != null) {
+          final map = jsonDecode(savedData);
+          final printer = SelectedPrinter.fromJson(map);
+          await PrinterHelper.printShiftReceipt(printer, true, balance, storeId, terminalId);
+        }
+      } catch (e) {
+        debugPrint('Error printing opening receipt: $e');
+      }
+
       if (mounted) {
         Navigator.pushReplacement(
           context,
@@ -85,13 +107,38 @@ class _OpeningBalanceScreenState extends State<OpeningBalanceScreen> {
         );
       }
     } catch (e) {
+      final errStr = e.toString();
+
+      // Backend says a shift already exists — fetch and resume it
+      if (errStr.contains('already has an open shift') || errStr.contains('open shift')) {
+        try {
+          final existingShift = await ApiService().getActiveShift(terminalId);
+          if (existingShift != null) {
+            await prefs.setString('shift_id', existingShift['id']);
+            final openingCash = double.tryParse(existingShift['opening_cash'].toString()) ?? 0.0;
+            if (mounted) {
+              Navigator.pushReplacement(
+                context,
+                MaterialPageRoute(builder: (_) => MainHome(openingBalance: openingCash)),
+              );
+            }
+            return;
+          }
+        } catch (_) {}
+      }
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
-        if (e.toString().contains('Session expired') || e.toString().contains('Unauthorized') || e.toString().contains('revoked')) {
+        if (errStr.contains('Session expired') || errStr.contains('Unauthorized') || errStr.contains('revoked')) {
           await prefs.remove('access_token');
-          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LoginScreen()));
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => const LoginScreen()),
+          );
         }
       }
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
     }
   }
 
@@ -112,7 +159,7 @@ class _OpeningBalanceScreenState extends State<OpeningBalanceScreen> {
           child: Text(
             val == '<' ? '⌫' : val,
             style: TextStyle(
-              fontSize: 24, 
+              fontSize: 24,
               fontWeight: (val == 'C' || val == '<') ? FontWeight.normal : FontWeight.bold,
               color: val == 'C' ? Colors.redAccent : Colors.black87,
             ),
@@ -141,11 +188,7 @@ class _OpeningBalanceScreenState extends State<OpeningBalanceScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
-                Icons.account_balance_wallet,
-                size: 50,
-                color: Colors.blue,
-              ),
+              const Icon(Icons.account_balance_wallet, size: 50, color: Colors.blue),
               const SizedBox(height: 16),
               const Text(
                 'Opening Balance',
@@ -176,7 +219,7 @@ class _OpeningBalanceScreenState extends State<OpeningBalanceScreen> {
                 ),
               ),
               const SizedBox(height: 20),
-              
+
               // Custom NumPad
               Column(
                 children: [
@@ -192,7 +235,7 @@ class _OpeningBalanceScreenState extends State<OpeningBalanceScreen> {
                 width: double.infinity,
                 height: 54,
                 child: ElevatedButton(
-                  onPressed: _submit,
+                  onPressed: _isSubmitting ? null : _submit,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Theme.of(context).colorScheme.primary,
                     foregroundColor: Colors.white,
@@ -201,10 +244,12 @@ class _OpeningBalanceScreenState extends State<OpeningBalanceScreen> {
                     ),
                     elevation: 0,
                   ),
-                  child: const Text(
-                    'Start Register',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                  ),
+                  child: _isSubmitting
+                      ? const CircularProgressIndicator(color: Colors.white)
+                      : const Text(
+                          'Start Register',
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                        ),
                 ),
               ),
             ],
@@ -214,5 +259,3 @@ class _OpeningBalanceScreenState extends State<OpeningBalanceScreen> {
     );
   }
 }
-
-

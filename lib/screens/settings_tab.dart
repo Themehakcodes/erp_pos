@@ -8,6 +8,7 @@ import 'dart:convert';
 import 'dart:async';
 import '../api_service.dart';
 import '../models/models.dart';
+import '../printer_helper.dart';
 
 class SettingsTab extends StatefulWidget {
   final SelectedPrinter? currentPrinter;
@@ -34,28 +35,15 @@ class _SettingsTabState extends State<SettingsTab> {
   StreamSubscription? _btSubscription;
   bool _isTesting = false;
   String _testResult = '';
-  String? _availablePort;
-
   @override
   void initState() {
     super.initState();
-    _scanPrinters();
     _loadDeviceId();
-    _detectPort();
   }
 
   Future<void> _loadDeviceId() async {
     final id = await ApiService().getDeviceIdentifier();
     setState(() => _deviceId = id);
-  }
-
-  Future<void> _detectPort() async {
-    try {
-      final port = await _printerChannel.invokeMethod<String?>('getAvailablePort');
-      setState(() => _availablePort = port);
-    } catch (_) {
-      setState(() => _availablePort = null);
-    }
   }
 
   void _scanPrinters() {
@@ -95,13 +83,19 @@ class _SettingsTabState extends State<SettingsTab> {
     });
   }
 
-  Future<void> _testInternalPrint() async {
+  Future<void> _testSelectedPrinter() async {
+    if (widget.currentPrinter == null) {
+      setState(() => _testResult = '❌ No printer selected');
+      return;
+    }
     setState(() { _isTesting = true; _testResult = ''; });
     try {
-      final success = await _printerChannel.invokeMethod<bool>('testPrinter');
-      setState(() => _testResult = success == true ? '✅ Internal printer OK!' : '❌ Internal print failed');
-    } on PlatformException catch (e) {
-      setState(() => _testResult = '❌ Error: ${e.message}');
+      bool success = await PrinterHelper.printTestReceipt(widget.currentPrinter);
+      if (success) {
+        setState(() => _testResult = '✅ Test Print OK!');
+      } else {
+        setState(() => _testResult = '❌ Printer busy or error');
+      }
     } catch (e) {
       setState(() => _testResult = '❌ $e');
     } finally {
@@ -158,62 +152,59 @@ class _SettingsTabState extends State<SettingsTab> {
                   padding: const EdgeInsets.all(12),
                   children: [
 
-                    // --- INTERNAL PRINTER (Atpos 1008 built-in) ---
-                    if (_availablePort != null) ...[
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 6),
-                        child: Text('INTERNAL PRINTER', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.green.shade700)),
-                      ),
-                      Container(
-                        margin: const EdgeInsets.only(bottom: 8),
-                        decoration: BoxDecoration(
-                          color: widget.currentPrinter?.isInternal == true ? Colors.green.shade50 : Colors.white,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: widget.currentPrinter?.isInternal == true ? Colors.green.shade300 : Colors.grey.shade300),
-                        ),
-                        child: Column(
-                          children: [
-                            ListTile(
-                              leading: Icon(Icons.print, color: widget.currentPrinter?.isInternal == true ? Colors.green.shade700 : Colors.grey),
-                              title: const Text('Built-in Hardware Printer'),
-                              subtitle: Text('Port: $_availablePort'),
-                              trailing: widget.currentPrinter?.isInternal == true ? const Icon(Icons.check_circle, color: Colors.green) : null,
-                              onTap: () => widget.onPrinterSelected(SelectedPrinter(isInternal: true)),
-                            ),
-                            Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: ElevatedButton.icon(
-                                      icon: _isTesting
-                                          ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                                          : const Icon(Icons.receipt, size: 16),
-                                      label: Text(_isTesting ? 'Printing...' : 'Test Print'),
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: Colors.green.shade600,
-                                        foregroundColor: Colors.white,
-                                        padding: const EdgeInsets.symmetric(vertical: 10),
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                                      ),
-                                      onPressed: _isTesting ? null : _testInternalPrint,
-                                    ),
-                                  ),
-                                  if (_testResult.isNotEmpty) ...[
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Text(_testResult, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _testResult.startsWith('✅') ? Colors.green.shade800 : Colors.red.shade800)),
-                                    ),
-                                  ],
-                                ],
+                    // --- TEST SELECTED PRINTER ---
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              icon: _isTesting
+                                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                                  : const Icon(Icons.receipt, size: 16),
+                              label: Text(_isTesting ? 'Printing Test...' : 'Test Selected Printer'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.blue.shade700,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                               ),
+                              onPressed: _isTesting ? null : _testSelectedPrinter,
+                            ),
+                          ),
+                          if (_testResult.isNotEmpty) ...[
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(_testResult, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _testResult.startsWith('✅') ? Colors.green.shade800 : Colors.red.shade800)),
                             ),
                           ],
-                        ),
+                        ],
                       ),
-                      const Divider(height: 20),
-                    ],
-
+                    ),
+                    const Divider(height: 20),
+                    
+                    // --- INTERNAL PRINTER (Atpos 1008 built-in) ---
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      child: Text('INTERNAL PRINTER', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.green.shade700)),
+                    ),
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      decoration: BoxDecoration(
+                        color: widget.currentPrinter?.isInternal == true ? Colors.green.shade50 : Colors.white,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: widget.currentPrinter?.isInternal == true ? Colors.green.shade300 : Colors.grey.shade300),
+                      ),
+                      child: ListTile(
+                        leading: Icon(Icons.print, color: widget.currentPrinter?.isInternal == true ? Colors.green.shade700 : Colors.grey),
+                        title: const Text('Built-in Hardware Printer (NYX)'),
+                        subtitle: const Text('Uses background NYX service'),
+                        trailing: widget.currentPrinter?.isInternal == true ? const Icon(Icons.check_circle, color: Colors.green) : null,
+                        onTap: () => widget.onPrinterSelected(SelectedPrinter(isInternal: true)),
+                      ),
+                    ),
+                    const Divider(height: 20),
+                    
                     // --- BLUETOOTH PRINTERS ---
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 6),

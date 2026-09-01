@@ -53,7 +53,26 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    // Cache the serial port output stream so we don't open/close it for every print.
+    // Closing a raw TTY serial port often causes the thermal printer hardware to hang or reset.
+    private var cachedOutputStream: FileOutputStream? = null
+
     private fun printToSerial(bytes: ByteArray): Boolean {
+        // If we already have an open stream, try using it first
+        cachedOutputStream?.let { fos ->
+            try {
+                fos.write(bytes)
+                fos.flush()
+                android.util.Log.d("POS_PRINTER", "Printed to cached port (${bytes.size} bytes)")
+                return true
+            } catch (e: Exception) {
+                android.util.Log.w("POS_PRINTER", "Cached port failed: ${e.message}. Reopening...")
+                try { fos.close() } catch (ignored: Exception) {}
+                cachedOutputStream = null
+            }
+        }
+
+        // If no cached stream or it failed, find the port and open it
         for (path in SERIAL_PATHS) {
             try {
                 val file = File(path)
@@ -62,7 +81,9 @@ class MainActivity : FlutterActivity() {
                 val fos = FileOutputStream(file)
                 fos.write(bytes)
                 fos.flush()
-                fos.close()
+                // DO NOT close the stream! Keep it open for the next print.
+                cachedOutputStream = fos
+                
                 android.util.Log.d("POS_PRINTER", "Printed to $path (${bytes.size} bytes)")
                 return true
             } catch (e: Exception) {

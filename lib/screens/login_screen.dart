@@ -1,22 +1,8 @@
-import 'main_home.dart';
-import 'pos_screen.dart';
-import 'sales_screen.dart';
-import 'settings_tab.dart';
-import 'login_screen.dart';
-import 'splash_loader.dart';
-import 'device_not_registered_screen.dart';
-import 'opening_balance_screen.dart';
 import 'package:flutter/material.dart';
-
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:flutter_pos_printer_platform_image_3/flutter_pos_printer_platform_image_3.dart';
 import 'package:qr_flutter/qr_flutter.dart';
-import 'dart:io';
-import 'dart:convert';
-import 'dart:async';
 import '../api_service.dart';
-import '../models/models.dart';
+import 'splash_loader.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
