@@ -259,4 +259,206 @@ class PrinterHelper {
     }
     return success;
   }
+
+  static List<int> generateShelfLabelBytes(Product product) {
+    List<int> bytes = [];
+    bytes.addAll([0x1B, 0x40]); // Init
+    bytes.addAll([0x1B, 0x61, 0x01]); // Center align
+
+    // Product Name
+    bytes.addAll([0x1B, 0x45, 0x01]); // Bold
+    bytes.addAll([0x1D, 0x21, 0x00]); // Normal size
+    bytes.addAll("${product.name}\n".codeUnits);
+
+    bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+    bytes.addAll("--------------------------------\n".codeUnits);
+
+    // Sale Rate (Prominently displayed)
+    bytes.addAll([0x1B, 0x45, 0x01]); // Bold on
+    bytes.addAll([0x1D, 0x21, 0x11]); // Double width & height
+    bytes.addAll("Rs ${product.saleRate.toStringAsFixed(2)}\n".codeUnits);
+
+    // MRP at bottom
+    bytes.addAll([0x1D, 0x21, 0x00]); // Normal size
+    bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+    bytes.addAll("MRP: Rs ${product.mrp.toStringAsFixed(2)}\n".codeUnits);
+    bytes.addAll("--------------------------------\n".codeUnits);
+
+    // Compact feed & cut for shelf rack
+    bytes.addAll("\n".codeUnits);
+    bytes.addAll([0x1D, 0x56, 0x41, 0x00]); // Cut
+    return bytes;
+  }
+
+  static List<int> generateBarcodeAndLabelBytes(Product product) {
+    List<int> bytes = [];
+    bytes.addAll([0x1B, 0x40]); // Init
+    bytes.addAll([0x1B, 0x61, 0x01]); // Center align
+
+    // Product Name
+    bytes.addAll([0x1B, 0x45, 0x01]); // Bold
+    bytes.addAll([0x1D, 0x21, 0x00]); // Normal size
+    bytes.addAll("${product.name}\n".codeUnits);
+    bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+
+    // Price & MRP row
+    bytes.addAll([0x1B, 0x45, 0x01]); // Bold
+    bytes.addAll("RATE: Rs ${product.saleRate.toStringAsFixed(2)}  (MRP: Rs ${product.mrp.toStringAsFixed(2)})\n\n".codeUnits);
+    bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+
+    // 1D Barcode (compact for shelf racks)
+    final rawBarcode = product.barcode.isNotEmpty ? product.barcode : (product.id.length >= 8 ? product.id.substring(0, 8) : '100001');
+    final cleanBarcode = rawBarcode.replaceAll(RegExp(r'[^A-Za-z0-9\-_.]'), '');
+
+    if (cleanBarcode.isNotEmpty) {
+      bytes.addAll([0x1D, 0x68, 48]); // Height = 48 dots (~6mm, compact for racks)
+      bytes.addAll([0x1D, 0x77, 2]);  // Module width = 2 (sharp and readable)
+      bytes.addAll([0x1D, 0x48, 0x02]); // HRI position: Below barcode
+      bytes.addAll([0x1D, 0x66, 0x00]); // HRI font: Font A
+
+      // ESC/POS CODE128 Code Set B prefix '{B'
+      final code128Payload = "{B$cleanBarcode".codeUnits;
+      bytes.addAll([0x1D, 0x6B, 0x49, code128Payload.length]);
+      bytes.addAll(code128Payload);
+      bytes.addAll("\n".codeUnits);
+    }
+
+    // Compact feed & cut for shelf rack
+    bytes.addAll("\n\n".codeUnits);
+    bytes.addAll([0x1D, 0x56, 0x41, 0x00]); // Cut
+    return bytes;
+  }
+
+  static Future<bool> printShelfLabel(SelectedPrinter? printer, Product product, {int copies = 1}) async {
+    final bytes = generateShelfLabelBytes(product);
+    return _sendPrintData(printer, bytes, copies: copies);
+  }
+
+  static Future<bool> printBarcodeAndLabel(SelectedPrinter? printer, Product product, {int copies = 1}) async {
+    final bytes = generateBarcodeAndLabelBytes(product);
+    return _sendPrintData(printer, bytes, copies: copies);
+  }
+
+  static List<int> generateDiscountLabelBytes(Product product) {
+    List<int> bytes = [];
+    bytes.addAll([0x1B, 0x40]); // Init
+    bytes.addAll([0x1B, 0x61, 0x01]); // Center align
+
+    final double mrp = product.mrp;
+    final double sale = product.saleRate;
+    final double savings = mrp - sale;
+    final int discountPercent = mrp > 0 && savings > 0 ? ((savings / mrp) * 100).round() : 0;
+
+    // Line 1: Product Name (Bold, 1 line)
+    bytes.addAll([0x1B, 0x45, 0x01]); // Bold on
+    bytes.addAll([0x1D, 0x21, 0x00]); // Normal size
+    bytes.addAll("${product.name}\n".codeUnits);
+    bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+    bytes.addAll("--------------------------------\n".codeUnits);
+
+    // Line 2: Discount (Bold, Double width & height)
+    bytes.addAll([0x1B, 0x45, 0x01]); // Bold on
+    bytes.addAll([0x1D, 0x21, 0x11]); // Double width & height
+    if (discountPercent > 0) {
+      bytes.addAll("$discountPercent% OFF\n".codeUnits);
+    } else if (savings > 0) {
+      bytes.addAll("SAVE Rs ${savings.toStringAsFixed(0)}\n".codeUnits);
+    } else {
+      bytes.addAll("SPECIAL OFFER\n".codeUnits);
+    }
+    bytes.addAll([0x1D, 0x21, 0x00]); // Normal size
+    bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+    bytes.addAll("--------------------------------\n".codeUnits);
+
+    // Line 3: Sale Rate , MRP (Bold, single line)
+    bytes.addAll([0x1B, 0x45, 0x01]); // Bold on
+    bytes.addAll("SALE: Rs ${sale.toStringAsFixed(2)} , MRP: Rs ${mrp.toStringAsFixed(2)}\n".codeUnits);
+    bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+
+    // Minimal feed & cut for shelf rack (matches standard shelf label height)
+    bytes.addAll("\n".codeUnits);
+    bytes.addAll([0x1D, 0x56, 0x41, 0x00]); // Cut
+    return bytes;
+  }
+
+  static Future<bool> printDiscountLabel(SelectedPrinter? printer, Product product, {int copies = 1}) async {
+    final bytes = generateDiscountLabelBytes(product);
+    return _sendPrintData(printer, bytes, copies: copies);
+  }
+
+  static Future<bool> _sendPrintData(SelectedPrinter? printer, List<int> bytes, {int copies = 1}) async {
+    if (printer == null) {
+      debugPrint('No printer selected.');
+      return false;
+    }
+    if (copies < 1) copies = 1;
+
+    // 1. Internal NYX AIDL Printer
+    if (printer.isInternal) {
+      while (_isPrintingHardware) {
+        await Future.delayed(const Duration(milliseconds: 200));
+      }
+      _isPrintingHardware = true;
+      try {
+        var ret = await NyxPrinter.getPrinterStatus();
+        if (ret == PrinterStatus.SDK_OK) {
+          final uint8 = Uint8List.fromList(bytes);
+          for (int i = 0; i < copies; i++) {
+            await NyxPrinter.printEscposData(uint8);
+            if (copies > 1) await Future.delayed(const Duration(milliseconds: 150));
+          }
+          return true;
+        }
+      } catch (e) {
+        debugPrint('NYX label print error: $e');
+      } finally {
+        _isPrintingHardware = false;
+      }
+      return false;
+    }
+
+    // 2. Bluetooth / USB Printer
+    while (_isPrintingHardware) {
+      await Future.delayed(const Duration(milliseconds: 200));
+    }
+    _isPrintingHardware = true;
+    bool success = false;
+
+    try {
+      var printerManager = PrinterManager.instance;
+      final device = printer.device!;
+      final type = printer.type!;
+      dynamic inputParams;
+
+      if (type == PrinterType.usb) {
+        inputParams = UsbPrinterInput(name: device.name, vendorId: device.vendorId, productId: device.productId);
+      } else if (type == PrinterType.bluetooth) {
+        inputParams = BluetoothPrinterInput(name: device.name, address: device.address!, isBle: false, autoConnect: false);
+      } else {
+        _isPrintingHardware = false;
+        return false;
+      }
+
+      bool isConnected = false;
+      try {
+        isConnected = (await printerManager.connect(type: type, model: inputParams).timeout(const Duration(seconds: 8))) == true;
+      } catch (_) {}
+
+      if (isConnected) {
+        final uint8 = Uint8List.fromList(bytes);
+        for (int i = 0; i < copies; i++) {
+          await printerManager.send(type: type, bytes: uint8).timeout(const Duration(seconds: 10));
+          if (copies > 1) await Future.delayed(const Duration(milliseconds: 150));
+        }
+        success = true;
+      }
+      try { await PrinterManager.instance.disconnect(type: type); } catch (_) {}
+    } catch (e) {
+      debugPrint('BT/USB label print error: $e');
+      try { await PrinterManager.instance.disconnect(type: printer.type!); } catch (_) {}
+    } finally {
+      _isPrintingHardware = false;
+    }
+    return success;
+  }
 }

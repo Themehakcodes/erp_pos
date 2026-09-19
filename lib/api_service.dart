@@ -133,15 +133,153 @@ class ApiService {
   Future<dynamic> getProducts({int page = 1, int limit = 100}) async {
     final prefs = await SharedPreferences.getInstance();
     final storeId = prefs.getString('store_id') ?? '';
+    final storeParam = storeId.isNotEmpty ? '&store_id=$storeId' : '';
     final res = await http.get(
-      Uri.parse(
-          '$baseUrl/pos/products/search?store_id=$storeId&page=$page&limit=$limit'),
+      Uri.parse('$baseUrl/pos/products/search?page=$page&limit=$limit$storeParam'),
       headers: await getAuthHeaders(),
     ).timeout(const Duration(seconds: 20));
     if (res.statusCode == 200) {
       return jsonDecode(res.body)['data'];
     }
     throw Exception(_extractError(res.body));
+  }
+
+  /// Searches products matching name, barcode, or SKU with fallback to catalog
+  Future<List<Map<String, dynamic>>> searchProducts(String query, {int limit = 50, int page = 1}) async {
+    final cleanQuery = query.trim();
+    final prefs = await SharedPreferences.getInstance();
+    final storeId = prefs.getString('store_id') ?? '';
+    final headers = await getAuthHeaders();
+    final storeParam = storeId.isNotEmpty ? '&store_id=$storeId' : '';
+
+    List<Map<String, dynamic>> parseList(dynamic rawData) {
+      if (rawData == null) return [];
+      if (rawData is List) {
+        return rawData.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+      }
+      if (rawData is Map) {
+        if (rawData['data'] is List) {
+          return (rawData['data'] as List).whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+        }
+        if (rawData['items'] is List) {
+          return (rawData['items'] as List).whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+        }
+      }
+      return [];
+    }
+
+    // 1. First search active POS products
+    try {
+      final qParam = cleanQuery.isNotEmpty ? '&search=${Uri.encodeComponent(cleanQuery)}' : '';
+      final url = '$baseUrl/pos/products/search?limit=$limit&page=$page&ignore_code=true$storeParam$qParam';
+      final res = await http.get(Uri.parse(url), headers: headers).timeout(const Duration(seconds: 10));
+      if (res.statusCode == 200) {
+        final decoded = jsonDecode(res.body);
+        final list = parseList(decoded['data']);
+        if (list.isNotEmpty) return list;
+      }
+    } catch (_) {}
+
+    // 2. Fallback to full master product catalog (in case store stock is 0 or unassigned)
+    try {
+      final qParam = cleanQuery.isNotEmpty ? '&search=${Uri.encodeComponent(cleanQuery)}' : '';
+      final url = '$baseUrl/products?limit=$limit&page=$page$qParam';
+      final res = await http.get(Uri.parse(url), headers: headers).timeout(const Duration(seconds: 10));
+      if (res.statusCode == 200) {
+        final decoded = jsonDecode(res.body);
+        final list = parseList(decoded['data']);
+        if (list.isNotEmpty) return list;
+      }
+    } catch (_) {}
+
+    return [];
+  }
+
+  /// Looks up a product by exact barcode, SKU/code, or query with full catalog fallbacks
+  Future<Map<String, dynamic>?> getProductByBarcode(String barcode) async {
+    final cleanBarcode = barcode.trim();
+    if (cleanBarcode.isEmpty) return null;
+
+    final prefs = await SharedPreferences.getInstance();
+    final storeId = prefs.getString('store_id') ?? '';
+    final headers = await getAuthHeaders();
+    final storeParam = storeId.isNotEmpty ? '?store_id=$storeId' : '';
+    final lowerTarget = cleanBarcode.toLowerCase();
+
+    bool isExactMatch(Map<String, dynamic> item) {
+      final b = (item['stock_barcode'] ?? item['barcode'] ?? '').toString().trim().toLowerCase();
+      final c = (item['product_code'] ?? item['sku'] ?? '').toString().trim().toLowerCase();
+      if (b == lowerTarget || c == lowerTarget) return true;
+
+      if (item['stocks'] is List) {
+        for (final s in (item['stocks'] as List)) {
+          if (s is Map) {
+            final sb = (s['stock_barcode'] ?? '').toString().trim().toLowerCase();
+            if (sb == lowerTarget) return true;
+          }
+        }
+      }
+      return false;
+    }
+
+    // 1. Try dedicated barcode endpoint
+    try {
+      final res = await http.get(
+        Uri.parse('$baseUrl/pos/products/barcode/${Uri.encodeComponent(cleanBarcode)}$storeParam'),
+        headers: headers,
+      ).timeout(const Duration(seconds: 10));
+
+      if (res.statusCode == 200) {
+        final decoded = jsonDecode(res.body);
+        final data = decoded['data'];
+        if (data is Map<String, dynamic>) {
+          if (data['data'] is List && (data['data'] as List).isNotEmpty) {
+            final list = (data['data'] as List).whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+            final exact = list.firstWhere((it) => isExactMatch(it), orElse: () => list.first);
+            return exact;
+          }
+          return data;
+        } else if (data is List && data.isNotEmpty) {
+          final list = data.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+          final exact = list.firstWhere((it) => isExactMatch(it), orElse: () => list.first);
+          return exact;
+        }
+      }
+    } catch (_) {}
+
+    // 2. Search POS products and look for exact barcode or code match
+    final posResults = await searchProducts(cleanBarcode, limit: 20);
+    for (final it in posResults) {
+      if (isExactMatch(it)) return it;
+    }
+    if (posResults.isNotEmpty) {
+      return posResults.first;
+    }
+
+    // 3. Fallback to master catalog for exact barcode lookup
+    try {
+      final res = await http.get(
+        Uri.parse('$baseUrl/products?search=${Uri.encodeComponent(cleanBarcode)}&limit=10&page=1'),
+        headers: headers,
+      ).timeout(const Duration(seconds: 10));
+
+      if (res.statusCode == 200) {
+        final decoded = jsonDecode(res.body);
+        final data = decoded['data'];
+        List<Map<String, dynamic>> list = [];
+        if (data is Map && data['data'] is List) {
+          list = (data['data'] as List).whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+        } else if (data is List) {
+          list = data.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+        }
+        for (final it in list) {
+          if (isExactMatch(it)) return it;
+        }
+        if (list.isNotEmpty) return list.first;
+      }
+    } catch (_) {}
+
+    return null;
   }
 
   /// Returns the backend invoice_no or null if offline

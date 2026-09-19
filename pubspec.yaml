@@ -16,6 +16,7 @@ dependencies:
   shared_preferences: ^2.5.5
   nyx_printer_flutter: ^1.0.1
   uuid: ^4.6.0
+  mobile_scanner: ^6.0.4
 dev_dependencies:
   flutter_test:
     sdk: flutter

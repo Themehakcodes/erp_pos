@@ -1,4 +1,4 @@
-﻿class Product {
+class Product {
   final String id;
   final String name;
   final double price;
@@ -22,11 +22,17 @@
     double purRate = (json['stock_purchase_rate'] ?? json['purchase_rate'] ?? 0.0).toDouble();
     String stId = '';
     
-    if (json['stocks'] != null && (json['stocks'] as List).isNotEmpty) {
-       var stk = json['stocks'][0];
-       saleRate = (stk['stock_sale_rate_a'] ?? saleRate).toDouble();
-       purRate = (stk['stock_purchase_rate'] ?? purRate).toDouble();
-       stId = stk['id'] ?? '';
+    if (json['stocks'] is List && (json['stocks'] as List).isNotEmpty) {
+       var stk = (json['stocks'] as List)[0];
+       if (stk is Map) {
+         if (stk['stock_sale_rate_a'] != null) {
+           saleRate = (stk['stock_sale_rate_a'] as num).toDouble();
+         }
+         if (stk['stock_purchase_rate'] != null) {
+           purRate = (stk['stock_purchase_rate'] as num).toDouble();
+         }
+         stId = stk['id']?.toString() ?? '';
+       }
     }
 
     return Product(

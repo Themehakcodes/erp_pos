@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_pos_printer_platform_image_3/flutter_pos_printer_platform_image_3.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'dart:async';
@@ -8,6 +7,7 @@ import '../models/models.dart';
 import 'pos_screen.dart';
 import 'sales_screen.dart';
 import 'settings_tab.dart';
+import 'barcode_print_screen.dart';
 
 class MainHome extends StatefulWidget {
   final double openingBalance;
@@ -19,8 +19,6 @@ class MainHome extends StatefulWidget {
 }
 
 class _MainHomeState extends State<MainHome> with WidgetsBindingObserver {
-  int _currentIndex = 0;
-
   late double _totalCash;
   double _totalUpi = 0.0;
   
@@ -155,6 +153,21 @@ class _MainHomeState extends State<MainHome> with WidgetsBindingObserver {
                       openingBalance: widget.openingBalance,
                       totalCash: _totalCash,
                       totalUpi: _totalUpi,
+                    ),
+                  ),
+                );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.qr_code_2, color: Colors.black87),
+              title: const Text('Print Barcode / Labels', style: TextStyle(fontWeight: FontWeight.bold)),
+              onTap: () {
+                Navigator.pop(context); // Close drawer
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => BarcodePrintScreen(
+                      selectedPrinter: _selectedPrinter,
                     ),
                   ),
                 );
