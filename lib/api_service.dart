@@ -183,7 +183,7 @@ class ApiService {
     // 2. Fallback to full master product catalog (in case store stock is 0 or unassigned)
     try {
       final qParam = cleanQuery.isNotEmpty ? '&search=${Uri.encodeComponent(cleanQuery)}' : '';
-      final url = '$baseUrl/products?limit=$limit&page=$page$qParam';
+      final url = '$baseUrl/products?limit=$limit&page=$page$storeParam$qParam';
       final res = await http.get(Uri.parse(url), headers: headers).timeout(const Duration(seconds: 10));
       if (res.statusCode == 200) {
         final decoded = jsonDecode(res.body);
@@ -214,6 +214,11 @@ class ApiService {
       if (item['stocks'] is List) {
         for (final s in (item['stocks'] as List)) {
           if (s is Map) {
+            // Only match barcodes that belong to THIS store
+            final sStore = (s['store_id'] ?? s['storeId'] ?? '').toString().trim().toLowerCase();
+            if (storeId.isNotEmpty && sStore.isNotEmpty && sStore != storeId.toLowerCase()) {
+              continue;
+            }
             final sb = (s['stock_barcode'] ?? '').toString().trim().toLowerCase();
             if (sb == lowerTarget) return true;
           }
@@ -258,8 +263,9 @@ class ApiService {
 
     // 3. Fallback to master catalog for exact barcode lookup
     try {
+      final storeParamAmp = storeId.isNotEmpty ? '&store_id=$storeId' : '';
       final res = await http.get(
-        Uri.parse('$baseUrl/products?search=${Uri.encodeComponent(cleanBarcode)}&limit=10&page=1'),
+        Uri.parse('$baseUrl/products?search=${Uri.encodeComponent(cleanBarcode)}&limit=10&page=1$storeParamAmp'),
         headers: headers,
       ).timeout(const Duration(seconds: 10));
 

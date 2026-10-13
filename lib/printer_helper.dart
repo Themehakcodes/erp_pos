@@ -265,11 +265,17 @@ class PrinterHelper {
     bytes.addAll([0x1B, 0x40]); // Init
     bytes.addAll([0x1B, 0x61, 0x01]); // Center align
 
+    // Top Store Header in small capital (Font B, Bold)
+    bytes.addAll([0x1B, 0x4D, 0x01]); // Font B (condensed small font)
+    bytes.addAll([0x1B, 0x45, 0x01]); // Bold on
+    bytes.addAll("KCSUPERMARKET\n".codeUnits);
+    bytes.addAll([0x1B, 0x4D, 0x00]); // Reset to Font A
+    bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+
     // Product Name
     bytes.addAll([0x1B, 0x45, 0x01]); // Bold
     bytes.addAll([0x1D, 0x21, 0x00]); // Normal size
     bytes.addAll("${product.name}\n".codeUnits);
-
     bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
     bytes.addAll("--------------------------------\n".codeUnits);
 
@@ -278,10 +284,11 @@ class PrinterHelper {
     bytes.addAll([0x1D, 0x21, 0x11]); // Double width & height
     bytes.addAll("Rs ${product.saleRate.toStringAsFixed(2)}\n".codeUnits);
 
-    // MRP at bottom
+    // MRP at bottom (Double height for readability)
+    bytes.addAll([0x1D, 0x21, 0x01]); // Double height
+    bytes.addAll("MRP: Rs ${product.mrp.toStringAsFixed(2)}\n".codeUnits);
     bytes.addAll([0x1D, 0x21, 0x00]); // Normal size
     bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
-    bytes.addAll("MRP: Rs ${product.mrp.toStringAsFixed(2)}\n".codeUnits);
     bytes.addAll("--------------------------------\n".codeUnits);
 
     // Compact feed & cut for shelf rack
@@ -295,15 +302,24 @@ class PrinterHelper {
     bytes.addAll([0x1B, 0x40]); // Init
     bytes.addAll([0x1B, 0x61, 0x01]); // Center align
 
+    // Top Store Header in small capital (Font B, Bold)
+    bytes.addAll([0x1B, 0x4D, 0x01]); // Font B (condensed small font)
+    bytes.addAll([0x1B, 0x45, 0x01]); // Bold on
+    bytes.addAll("KCSUPERMARKET\n".codeUnits);
+    bytes.addAll([0x1B, 0x4D, 0x00]); // Reset to Font A
+    bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+
     // Product Name
     bytes.addAll([0x1B, 0x45, 0x01]); // Bold
     bytes.addAll([0x1D, 0x21, 0x00]); // Normal size
     bytes.addAll("${product.name}\n".codeUnits);
     bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
 
-    // Price & MRP row
+    // Price & MRP row (Bold, Double height)
     bytes.addAll([0x1B, 0x45, 0x01]); // Bold
-    bytes.addAll("RATE: Rs ${product.saleRate.toStringAsFixed(2)}  (MRP: Rs ${product.mrp.toStringAsFixed(2)})\n\n".codeUnits);
+    bytes.addAll([0x1D, 0x21, 0x01]); // Double height
+    bytes.addAll("RATE: Rs ${product.saleRate.toStringAsFixed(2)} (MRP: Rs ${product.mrp.toStringAsFixed(2)})\n\n".codeUnits);
+    bytes.addAll([0x1D, 0x21, 0x00]); // Normal size
     bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
 
     // 1D Barcode (compact for shelf racks)
@@ -324,7 +340,7 @@ class PrinterHelper {
     }
 
     // Compact feed & cut for shelf rack
-    bytes.addAll("\n\n".codeUnits);
+    bytes.addAll("\n".codeUnits);
     bytes.addAll([0x1D, 0x56, 0x41, 0x00]); // Cut
     return bytes;
   }
@@ -344,6 +360,13 @@ class PrinterHelper {
     bytes.addAll([0x1B, 0x40]); // Init
     bytes.addAll([0x1B, 0x61, 0x01]); // Center align
 
+    // Top Store Header in small capital (Font B, Bold)
+    bytes.addAll([0x1B, 0x4D, 0x01]); // Font B (condensed small font)
+    bytes.addAll([0x1B, 0x45, 0x01]); // Bold on
+    bytes.addAll("KCSUPERMARKET\n".codeUnits);
+    bytes.addAll([0x1B, 0x4D, 0x00]); // Reset to Font A
+    bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+
     final double mrp = product.mrp;
     final double sale = product.saleRate;
     final double savings = mrp - sale;
@@ -356,23 +379,28 @@ class PrinterHelper {
     bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
     bytes.addAll("--------------------------------\n".codeUnits);
 
-    // Line 2: Discount (Bold, Double width & height)
+    // Line 2: Discount - Large percentage and off in a single row
     bytes.addAll([0x1B, 0x45, 0x01]); // Bold on
-    bytes.addAll([0x1D, 0x21, 0x11]); // Double width & height
     if (discountPercent > 0) {
-      bytes.addAll("$discountPercent% OFF\n".codeUnits);
+      // Large font for the entire line (Double width & double height) - no mid-line size change to guarantee single row!
+      bytes.addAll([0x1D, 0x21, 0x11]); // Double width & double height
+      bytes.addAll("$discountPercent% off\n".codeUnits);
     } else if (savings > 0) {
+      bytes.addAll([0x1D, 0x21, 0x11]); // Double width & height
       bytes.addAll("SAVE Rs ${savings.toStringAsFixed(0)}\n".codeUnits);
     } else {
+      bytes.addAll([0x1D, 0x21, 0x11]); // Double width & height
       bytes.addAll("SPECIAL OFFER\n".codeUnits);
     }
     bytes.addAll([0x1D, 0x21, 0x00]); // Normal size
     bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
     bytes.addAll("--------------------------------\n".codeUnits);
 
-    // Line 3: Sale Rate , MRP (Bold, single line)
+    // Line 3: Sale Rate , MRP (Bold, Double height - larger rates text)
     bytes.addAll([0x1B, 0x45, 0x01]); // Bold on
+    bytes.addAll([0x1D, 0x21, 0x01]); // Double height
     bytes.addAll("SALE: Rs ${sale.toStringAsFixed(2)} , MRP: Rs ${mrp.toStringAsFixed(2)}\n".codeUnits);
+    bytes.addAll([0x1D, 0x21, 0x00]); // Normal size
     bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
 
     // Minimal feed & cut for shelf rack (matches standard shelf label height)
@@ -383,6 +411,60 @@ class PrinterHelper {
 
   static Future<bool> printDiscountLabel(SelectedPrinter? printer, Product product, {int copies = 1}) async {
     final bytes = generateDiscountLabelBytes(product);
+    return _sendPrintData(printer, bytes, copies: copies);
+  }
+
+  static List<int> generateBogoLabelBytes(Product product) {
+    if (!product.isBogo) {
+      return generateDiscountLabelBytes(product);
+    }
+    List<int> bytes = [];
+    bytes.addAll([0x1B, 0x40]); // Init
+    bytes.addAll([0x1B, 0x61, 0x01]); // Center align
+
+    // Top Store Header in small capital (Font B, Bold)
+    bytes.addAll([0x1B, 0x4D, 0x01]); // Font B (condensed small font)
+    bytes.addAll([0x1B, 0x45, 0x01]); // Bold on
+    bytes.addAll("KCSUPERMARKET\n".codeUnits);
+    bytes.addAll([0x1B, 0x4D, 0x00]); // Reset to Font A
+    bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+
+    final double mrp = product.mrp;
+
+    // Line 1: Product Name (Bold, 1 line)
+    bytes.addAll([0x1B, 0x45, 0x01]); // Bold on
+    bytes.addAll([0x1D, 0x21, 0x00]); // Normal size
+    bytes.addAll("${product.name}\n".codeUnits);
+    bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+    bytes.addAll("--------------------------------\n".codeUnits);
+
+    // Line 2: BOGO Offer Text (Bold, Double width & height - large eye-catching offer)
+    bytes.addAll([0x1B, 0x45, 0x01]); // Bold on
+    bytes.addAll([0x1D, 0x21, 0x11]); // Double width & height
+    bytes.addAll("BUY 1 GET 1 FREE\n".codeUnits);
+    bytes.addAll([0x1D, 0x21, 0x00]); // Normal size
+    bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+    bytes.addAll("--------------------------------\n".codeUnits);
+
+    // Line 3: ONLY MRP for BOGO (Strictly DO NOT show sale rate!)
+    bytes.addAll([0x1B, 0x45, 0x01]); // Bold on
+    bytes.addAll([0x1D, 0x21, 0x01]); // Double height
+    bytes.addAll("MRP: Rs ${mrp.toStringAsFixed(2)}\n".codeUnits);
+    bytes.addAll([0x1D, 0x21, 0x00]); // Normal size
+    bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+
+    // Minimal feed & cut for shelf rack (matches standard shelf label height)
+    bytes.addAll("\n".codeUnits);
+    bytes.addAll([0x1D, 0x56, 0x41, 0x00]); // Cut
+    return bytes;
+  }
+
+  static Future<bool> printBogoLabel(SelectedPrinter? printer, Product product, {int copies = 1}) async {
+    if (!product.isBogo) {
+      debugPrint('Cannot print BOGO label: sale rate is not half of MRP');
+      return false;
+    }
+    final bytes = generateBogoLabelBytes(product);
     return _sendPrintData(printer, bytes, copies: copies);
   }
 

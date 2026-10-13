@@ -54,6 +54,7 @@ class _PosScreenState extends State<PosScreen> {
 
   Future<void> _loadData() async {
     final prefs = await SharedPreferences.getInstance();
+    final storeId = prefs.getString('store_id') ?? '';
     setState(() {
       _userId = prefs.getString('user_name') ?? 'Cashier';
       _estCounter = prefs.getInt('est_counter') ?? 1;
@@ -65,15 +66,16 @@ class _PosScreenState extends State<PosScreen> {
         if (data is List) {
           itemsList = data;
         } else if (data is Map) {
-          if (data['items'] != null)
+          if (data['items'] != null) {
             itemsList = data['items'];
-          else if (data['products'] != null)
+          } else if (data['products'] != null) {
             itemsList = data['products'];
-          else if (data['data'] != null)
+          } else if (data['data'] != null) {
             itemsList = data['data'];
+          }
         }
         _products = itemsList
-            .map((e) => Product.fromJson(e as Map<String, dynamic>))
+            .map((e) => Product.fromJson(e as Map<String, dynamic>, targetStoreId: storeId))
             .toList();
         _isLoading = false;
       });
