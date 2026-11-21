@@ -193,3 +193,128 @@ class SelectedPrinter {
     return SelectedPrinter(device: d, type: t, isInternal: false);
   }
 }
+
+class BillReceiptItem {
+  final String name;
+  final double quantity;
+  final double price;
+  final double lineTotal;
+
+  BillReceiptItem({
+    required this.name,
+    required this.quantity,
+    required this.price,
+    double? lineTotal,
+  }) : lineTotal = lineTotal ?? (price * quantity);
+
+  String get quantityString =>
+      (quantity % 1 == 0) ? quantity.toInt().toString() : quantity.toStringAsFixed(2);
+
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        'quantity': quantity,
+        'price': price,
+        'line_total': lineTotal,
+      };
+
+  factory BillReceiptItem.fromJson(Map<String, dynamic> json) {
+    final qty = (json['quantity'] is num)
+        ? (json['quantity'] as num).toDouble()
+        : (double.tryParse(json['quantity']?.toString() ?? '1') ?? 1.0);
+    final pr = json['price'] ?? json['sale_rate'] ?? json['mrp'] ?? 0.0;
+    final prD = (pr is num) ? pr.toDouble() : (double.tryParse(pr.toString()) ?? 0.0);
+    final lt = json['line_total'] ?? json['taxable_amount'] ?? (prD * qty);
+    final ltD = (lt is num) ? lt.toDouble() : (double.tryParse(lt.toString()) ?? (prD * qty));
+
+    return BillReceiptItem(
+      name: (json['name'] ?? json['product_name'] ?? 'Item').toString(),
+      quantity: qty,
+      price: prD,
+      lineTotal: ltD,
+    );
+  }
+}
+
+class BillReceiptData {
+  final String id;
+  final String invoiceNo;
+  final String dateStr;
+  final List<BillReceiptItem> items;
+  final double subtotal;
+  final double roundOff;
+  final double totalAmount;
+  final String method;
+  final bool isOffline;
+  final bool isCancelled;
+  final String shiftId;
+
+  BillReceiptData({
+    this.id = '',
+    required this.invoiceNo,
+    required this.dateStr,
+    required this.items,
+    required this.totalAmount,
+    double? subtotal,
+    this.roundOff = 0.0,
+    this.method = 'Cash',
+    this.isOffline = false,
+    this.isCancelled = false,
+    this.shiftId = '',
+  }) : subtotal = subtotal ??
+            items.fold(0.0, (sum, it) => sum + (it.price * it.quantity));
+
+  int get totalItemsCount => items.length;
+  double get totalQuantity =>
+      items.fold(0.0, (sum, it) => sum + it.quantity);
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'invoice_no': invoiceNo,
+        'date_str': dateStr,
+        'items': items.map((i) => i.toJson()).toList(),
+        'subtotal': subtotal,
+        'round_off': roundOff,
+        'total_amount': totalAmount,
+        'method': method,
+        'is_offline': isOffline,
+        'is_cancelled': isCancelled,
+        'shift_id': shiftId,
+      };
+
+  factory BillReceiptData.fromJson(Map<String, dynamic> json) {
+    List<BillReceiptItem> parsedItems = [];
+    if (json['items'] is List) {
+      for (final it in (json['items'] as List)) {
+        if (it is Map) {
+          parsedItems.add(BillReceiptItem.fromJson(Map<String, dynamic>.from(it)));
+        }
+      }
+    }
+
+    final tot = json['total_amount'] ?? json['net_amount'] ?? 0.0;
+    final totD = (tot is num) ? tot.toDouble() : (double.tryParse(tot.toString()) ?? 0.0);
+
+    final sub = json['subtotal'] ?? json['subtotal_amount'] ?? totD;
+    final subD = (sub is num) ? sub.toDouble() : (double.tryParse(sub.toString()) ?? totD);
+
+    final ro = json['round_off'] ?? json['round_off_amount'] ?? 0.0;
+    final roD = (ro is num) ? ro.toDouble() : (double.tryParse(ro.toString()) ?? 0.0);
+
+    String m = (json['method'] ?? json['payment_methods_used'] ?? 'Cash').toString();
+    if (m.isEmpty) m = 'Cash';
+
+    return BillReceiptData(
+      id: (json['id'] ?? '').toString(),
+      invoiceNo: (json['invoice_no'] ?? json['invoice_number'] ?? 'UNKNOWN').toString(),
+      dateStr: (json['date_str'] ?? json['invoice_date'] ?? json['created_at'] ?? '').toString(),
+      items: parsedItems,
+      subtotal: subD,
+      roundOff: roD,
+      totalAmount: totD,
+      method: m,
+      isOffline: json['is_offline'] == true,
+      isCancelled: json['is_cancelled'] == true,
+      shiftId: (json['shift_id'] ?? '').toString(),
+    );
+  }
+}

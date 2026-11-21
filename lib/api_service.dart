@@ -1,8 +1,10 @@
 import 'dart:convert';
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
+import 'models/models.dart';
 
 class ApiService {
   static String baseUrl = 'http://192.168.1.150:8080/api/v1';
@@ -440,6 +442,208 @@ class ApiService {
       }
     } catch (_) {}
     return [];
+  }
+
+  /// Fetches sales list from ERP backend with optional filters for shift, store, search, and dates
+  Future<List<Map<String, dynamic>>> getSales({
+    int page = 1,
+    int limit = 50,
+    String? shiftId,
+    String? storeId,
+    String? search,
+    String? fromDate,
+    String? toDate,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final effectiveStoreId = storeId ?? prefs.getString('store_id') ?? '';
+    final queryParams = <String, String>{
+      'page': page.toString(),
+      'limit': limit.toString(),
+      if (effectiveStoreId.isNotEmpty) 'store_id': effectiveStoreId,
+      if (shiftId != null && shiftId.isNotEmpty) 'shift_id': shiftId,
+      if (search != null && search.trim().isNotEmpty) 'search': search.trim(),
+      if (fromDate != null && fromDate.isNotEmpty) 'from_date': fromDate,
+      if (toDate != null && toDate.isNotEmpty) 'to_date': toDate,
+    };
+
+    final uri = Uri.parse('$baseUrl/sales').replace(queryParameters: queryParams);
+    final res = await http.get(uri, headers: await getAuthHeaders()).timeout(const Duration(seconds: 15));
+
+    if (res.statusCode == 200) {
+      final decoded = jsonDecode(res.body);
+      final data = decoded['data'];
+      if (data is List) {
+        return data.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+      }
+      return [];
+    }
+    throw Exception(_extractError(res.body));
+  }
+
+  /// Fetches single sale invoice with all line items and payment details for reprinting
+  Future<BillReceiptData> getSaleInvoiceDetails(String invoiceId) async {
+    final res = await http.get(
+      Uri.parse('$baseUrl/sales/$invoiceId'),
+      headers: await getAuthHeaders(),
+    ).timeout(const Duration(seconds: 15));
+
+    if (res.statusCode == 200) {
+      final decoded = jsonDecode(res.body);
+      final data = decoded['data'];
+      if (data is Map) {
+        final invMap = (data['invoice'] is Map) ? Map<String, dynamic>.from(data['invoice']) : Map<String, dynamic>.from(data);
+        final itemsRaw = data['items'] ?? invMap['items'] ?? [];
+        final paymentsRaw = data['payments'] ?? invMap['payments'] ?? [];
+
+        List<BillReceiptItem> items = [];
+        if (itemsRaw is List) {
+          for (final it in itemsRaw) {
+            if (it is Map) {
+              items.add(BillReceiptItem.fromJson(Map<String, dynamic>.from(it)));
+            }
+          }
+        }
+
+        String paymentMethod = 'Cash';
+        if (paymentsRaw is List && paymentsRaw.isNotEmpty) {
+          final firstPay = paymentsRaw.first;
+          if (firstPay is Map) {
+            paymentMethod = (firstPay['payment_method_name'] ?? firstPay['method'] ?? firstPay['payment_method'] ?? 'Cash').toString();
+          }
+        }
+
+        final netAmount = (invMap['net_amount'] is num)
+            ? (invMap['net_amount'] as num).toDouble()
+            : (double.tryParse(invMap['net_amount']?.toString() ?? '0') ?? 0.0);
+        final subtotal = (invMap['subtotal_amount'] is num)
+            ? (invMap['subtotal_amount'] as num).toDouble()
+            : (double.tryParse(invMap['subtotal_amount']?.toString() ?? '0') ?? netAmount);
+        final roundOff = (invMap['round_off_amount'] is num)
+            ? (invMap['round_off_amount'] as num).toDouble()
+            : (double.tryParse(invMap['round_off_amount']?.toString() ?? '0') ?? 0.0);
+
+        return BillReceiptData(
+          id: (invMap['id'] ?? invoiceId).toString(),
+          invoiceNo: (invMap['invoice_number'] ?? invMap['invoice_no'] ?? '').toString(),
+          dateStr: (invMap['invoice_date'] ?? invMap['created_at'] ?? '').toString(),
+          items: items,
+          subtotal: subtotal,
+          roundOff: roundOff,
+          totalAmount: netAmount,
+          method: paymentMethod,
+          isOffline: false,
+          isCancelled: invMap['is_cancelled'] == true,
+          shiftId: (invMap['shift_id'] ?? '').toString(),
+        );
+      }
+    }
+    throw Exception(_extractError(res.body));
+  }
+
+  /// Saves a newly generated bill to local terminal history (keeps last 100 bills)
+  /// Guarantees that ANY bill created on this terminal during the shift can be reprinted
+  /// instantly even if Wi-Fi or internet connection is completely down.
+  static Future<void> saveBillToLocalShiftHistory(BillReceiptData bill) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = prefs.getStringList('current_shift_bills') ?? [];
+      final encoded = jsonEncode(bill.toJson());
+
+      // Filter out duplicate if same invoice number already existed
+      final filtered = list.where((itemStr) {
+        try {
+          final m = jsonDecode(itemStr);
+          return (m['invoice_no'] ?? m['invoice_number']) != bill.invoiceNo;
+        } catch (_) {
+          return true;
+        }
+      }).toList();
+
+      filtered.insert(0, encoded);
+      if (filtered.length > 100) {
+        filtered.removeRange(100, filtered.length);
+      }
+      await prefs.setStringList('current_shift_bills', filtered);
+    } catch (e) {
+      debugPrint('Error saving bill to local shift history: $e');
+    }
+  }
+
+  /// Retrieves all bills saved in the local terminal cache
+  static Future<List<BillReceiptData>> getLocalShiftBills() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = prefs.getStringList('current_shift_bills') ?? [];
+      final result = <BillReceiptData>[];
+      for (final itemStr in list) {
+        try {
+          final map = jsonDecode(itemStr);
+          if (map is Map<String, dynamic>) {
+            result.add(BillReceiptData.fromJson(map));
+          }
+        } catch (_) {}
+      }
+      return result;
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Converts un-synced offline sales stored in 'offline_sales' into BillReceiptData
+  static Future<List<BillReceiptData>> getOfflinePendingBills() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = prefs.getStringList('offline_sales') ?? [];
+      final result = <BillReceiptData>[];
+      for (int i = 0; i < list.length; i++) {
+        try {
+          final map = jsonDecode(list[i]);
+          if (map is Map<String, dynamic>) {
+            final itemsRaw = map['items'] ?? [];
+            List<BillReceiptItem> items = [];
+            if (itemsRaw is List) {
+              for (final it in itemsRaw) {
+                if (it is Map) {
+                  items.add(BillReceiptItem.fromJson(Map<String, dynamic>.from(it)));
+                }
+              }
+            }
+
+            final netAmount = (map['net_amount'] is num)
+                ? (map['net_amount'] as num).toDouble()
+                : (double.tryParse(map['net_amount']?.toString() ?? '0') ?? 0.0);
+            final subtotal = (map['subtotal_amount'] is num)
+                ? (map['subtotal_amount'] as num).toDouble()
+                : (double.tryParse(map['subtotal_amount']?.toString() ?? '0') ?? netAmount);
+            final roundOff = (map['round_off_amount'] is num)
+                ? (map['round_off_amount'] as num).toDouble()
+                : (double.tryParse(map['round_off_amount']?.toString() ?? '0') ?? 0.0);
+
+            String method = 'Cash';
+            final payments = map['payments'];
+            if (payments is List && payments.isNotEmpty && payments[0] is Map) {
+              method = (payments[0]['method'] ?? payments[0]['payment_method'] ?? 'Offline').toString();
+            }
+
+            result.add(BillReceiptData(
+              id: 'offline_$i',
+              invoiceNo: (map['invoice_no'] ?? map['invoice_number'] ?? 'EST${(i + 1).toString().padLeft(4, "0")}').toString(),
+              dateStr: (map['invoice_date'] ?? DateTime.now().toString()).toString(),
+              items: items,
+              subtotal: subtotal,
+              roundOff: roundOff,
+              totalAmount: netAmount,
+              method: method,
+              isOffline: true,
+              shiftId: (map['shift_id'] ?? '').toString(),
+            ));
+          }
+        } catch (_) {}
+      }
+      return result;
+    } catch (_) {
+      return [];
+    }
   }
 
   String _extractError(String body) {

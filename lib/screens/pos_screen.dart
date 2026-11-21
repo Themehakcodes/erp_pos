@@ -2,18 +2,11 @@ import 'package:flutter/material.dart';
 import 'login_screen.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter_pos_printer_platform_image_3/flutter_pos_printer_platform_image_3.dart';
-import 'package:nyx_printer_flutter/nyx_printer.dart';
-import 'package:nyx_printer_flutter/nyx_printer_definition.dart';
-import 'package:qr_flutter/qr_flutter.dart';
-import 'package:flutter/services.dart';
-import 'dart:io';
-import 'dart:convert';
 import 'dart:async';
-import 'dart:typed_data';
 import '../api_service.dart';
 import '../models/models.dart';
 import '../printer_helper.dart';
+import 'bill_history_screen.dart';
 
 class PosScreen extends StatefulWidget {
   final Function(String method, double amount) onSaleCompleted;
@@ -30,9 +23,6 @@ class PosScreen extends StatefulWidget {
 }
 
 class _PosScreenState extends State<PosScreen> {
-  // Native MethodChannel for internal Atpos 1008 printer — bypasses Bluetooth/USB plugin entirely
-  static const _printerChannel = MethodChannel('pos_printer');
-
   final List<CartItem> _cart = [];
   final ValueNotifier<int> _cartNotifier = ValueNotifier<int>(0);
   List<Product> _products = [];
@@ -42,9 +32,6 @@ class _PosScreenState extends State<PosScreen> {
   int _estCounter = 1;
   bool _isProcessing = false; // guard against double-tap checkout
   bool _isBottomSheetOpen = false;
-
-  // Global hardware lock to prevent Bluetooth stack from crashing and lagging the app
-  static bool _isPrintingHardware = false;
 
   @override
   void initState() {
@@ -75,7 +62,12 @@ class _PosScreenState extends State<PosScreen> {
           }
         }
         _products = itemsList
-            .map((e) => Product.fromJson(e as Map<String, dynamic>, targetStoreId: storeId))
+            .map(
+              (e) => Product.fromJson(
+                e as Map<String, dynamic>,
+                targetStoreId: storeId,
+              ),
+            )
             .toList();
         _isLoading = false;
       });
@@ -141,11 +133,22 @@ class _PosScreenState extends State<PosScreen> {
     }
   }
 
-  double get _totalAmount {
+  double get _subtotal {
     return _cart.fold(
       0.0,
       (sum, item) => sum + (item.product.price * item.quantity),
     );
+  }
+
+  double get _roundOffAmount {
+    if (_cart.isEmpty) return 0.0;
+    final rounded = _subtotal.roundToDouble();
+    return double.parse((rounded - _subtotal).toStringAsFixed(2));
+  }
+
+  double get _totalAmount {
+    if (_cart.isEmpty) return 0.0;
+    return _subtotal.roundToDouble();
   }
 
   Widget _buildQuantityButton({
@@ -472,6 +475,8 @@ class _PosScreenState extends State<PosScreen> {
       builder: (context) {
         return SplitPaymentDialog(
           totalAmount: _totalAmount,
+          subtotal: _subtotal,
+          roundOff: _roundOffAmount,
           onConfirm: (cash, upi) {
             Navigator.pop(context);
             _processSplitPayment(cash, upi);
@@ -484,6 +489,8 @@ class _PosScreenState extends State<PosScreen> {
   Future<void> _processSplitPayment(double cashAmount, double upiAmount) async {
     if (_isProcessing) return; // prevent double-tap duplicate bills
     setState(() => _isProcessing = true);
+    final subtotal = _subtotal;
+    final roundOff = _roundOffAmount;
     final amountToCharge = _totalAmount;
 
     String method = '';
@@ -575,13 +582,13 @@ class _PosScreenState extends State<PosScreen> {
         "is_gst_bill": false,
         "total_items": _cart.length,
         "total_quantity": _cart.fold(0.0, (sum, item) => sum + item.quantity),
-        "subtotal_amount": amountToCharge,
+        "subtotal_amount": subtotal,
         "discount_amount": 0.0,
-        "taxable_amount": amountToCharge,
+        "taxable_amount": subtotal,
         "cgst_amount": 0.0,
         "sgst_amount": 0.0,
         "igst_amount": 0.0,
-        "round_off_amount": 0.0,
+        "round_off_amount": roundOff,
         "net_amount": amountToCharge,
         "gross_profit_amount": 0.0,
         "remarks": "Flutter POS Terminal",
@@ -626,6 +633,31 @@ class _PosScreenState extends State<PosScreen> {
       await prefs2.setInt('est_counter', nextCounter);
 
       final cartSnapshot = List<CartItem>.from(_cart);
+
+      final billRecord = BillReceiptData(
+        invoiceNo: displayNo,
+        dateStr: DateTime.now().toString().substring(0, 16),
+        items: cartSnapshot
+            .map(
+              (c) => BillReceiptItem(
+                name: c.product.name,
+                quantity: c.quantity.toDouble(),
+                price: c.product.price,
+                lineTotal: c.product.price * c.quantity,
+              ),
+            )
+            .toList(),
+        subtotal: subtotal,
+        roundOff: roundOff,
+        totalAmount: amountToCharge,
+        method: method,
+        isOffline: (invoiceNo == null),
+        shiftId: shiftId ?? '',
+      );
+
+      // Save to local shift history cache so ANY bill can be reprinted anytime
+      unawaited(ApiService.saveBillToLocalShiftHistory(billRecord));
+
       widget.onSaleCompleted(method, amountToCharge);
       if (mounted && _isBottomSheetOpen) {
         Navigator.pop(context);
@@ -653,7 +685,13 @@ class _PosScreenState extends State<PosScreen> {
       // Print asynchronously after UI has completely updated and rendered
       Future.delayed(
         const Duration(milliseconds: 500),
-        () => _printReceipt(method, cartSnapshot, amountToCharge, displayNo),
+        () => _printReceipt(
+          method,
+          cartSnapshot,
+          amountToCharge,
+          displayNo,
+          billRecord: billRecord,
+        ),
       );
     } catch (e) {
       if (mounted) {
@@ -675,191 +713,36 @@ class _PosScreenState extends State<PosScreen> {
     }
   }
 
-  Future<List<int>> _generateReceiptBytes(
-    String method,
-    List<CartItem> cartSnapshot,
-    double totalAmount,
-    String invoiceNo,
-  ) async {
-    final List<int> bytes = [];
-    bytes.addAll([0x1B, 0x40]);
-    bytes.addAll([0x1B, 0x61, 0x01]);
-    bytes.addAll([0x1B, 0x45, 0x01]);
-    bytes.addAll([0x1D, 0x21, 0x11]);
-
-    // Print the actual server invoice no (SI-XXXX) or local ESTXXXX
-    bytes.addAll("$invoiceNo\n\n".codeUnits);
-    bytes.addAll([0x1D, 0x21, 0x00]);
-    bytes.addAll([0x1B, 0x45, 0x00]);
-    bytes.addAll(
-      "Date: ${DateTime.now().toString().substring(0, 16)}\n".codeUnits,
-    );
-    bytes.addAll([0x1B, 0x61, 0x00]);
-    bytes.addAll("--------------------------------\n".codeUnits);
-
-    for (var item in cartSnapshot) {
-      String nameLine = "${item.product.name} x${item.quantity}";
-      String priceLine =
-          "Rs ${(item.product.price * item.quantity).toStringAsFixed(2)}";
-      int paddingSize = 32 - nameLine.length - priceLine.length;
-      if (paddingSize < 1) paddingSize = 1;
-      String padding = " " * paddingSize;
-      bytes.addAll("$nameLine$padding$priceLine\n".codeUnits);
-    }
-
-    bytes.addAll("--------------------------------\n".codeUnits);
-    bytes.addAll([0x1B, 0x45, 0x01]);
-    String totalTitle = "TOTAL";
-    String totalValue = "Rs ${totalAmount.toStringAsFixed(2)}";
-    int pad1 = 32 - totalTitle.length - totalValue.length;
-    bytes.addAll(
-      "$totalTitle${" " * (pad1 > 0 ? pad1 : 1)}$totalValue\n".codeUnits,
-    );
-    bytes.addAll([0x1B, 0x45, 0x00]);
-    String methodTitle = "METHOD";
-    int pad2 = 32 - methodTitle.length - method.length;
-    bytes.addAll(
-      "$methodTitle${" " * (pad2 > 0 ? pad2 : 1)}$method\n".codeUnits,
-    );
-    bytes.addAll("--------------------------------\n".codeUnits);
-    bytes.addAll([0x1B, 0x61, 0x01]);
-    bytes.addAll([0x1B, 0x45, 0x01]);
-    bytes.addAll("Thank You!\n".codeUnits);
-    bytes.addAll([0x1B, 0x45, 0x00]);
-    bytes.addAll("Please visit again\n\n\n\n".codeUnits);
-    bytes.addAll([0x1D, 0x56, 0x41, 0x00]);
-    return bytes;
-  }
-
   Future<void> _printReceipt(
     String method,
     List<CartItem> cartSnapshot,
     double totalAmount,
-    String invoiceNo,
-  ) async {
-    // Generate ESC/POS bytes first (pure Dart — no hardware)
-    final List<int> receiptBytes = await _generateReceiptBytes(
-      method,
-      cartSnapshot,
-      totalAmount,
-      invoiceNo,
-    );
-    final Uint8List bytes = Uint8List.fromList(receiptBytes);
+    String invoiceNo, {
+    BillReceiptData? billRecord,
+  }) async {
+    final record =
+        billRecord ??
+        BillReceiptData(
+          invoiceNo: invoiceNo,
+          dateStr: DateTime.now().toString().substring(0, 16),
+          items: cartSnapshot
+              .map(
+                (c) => BillReceiptItem(
+                  name: c.product.name,
+                  quantity: c.quantity.toDouble(),
+                  price: c.product.price,
+                  lineTotal: c.product.price * c.quantity,
+                ),
+              )
+              .toList(),
+          totalAmount: totalAmount,
+          method: method,
+        );
 
-    // If no printer is selected, skip
-    if (widget.selectedPrinter == null) {
-      debugPrint('No printer selected. Skipping print.');
-      return;
-    }
-
-    // 1. If internal printer is explicitly selected — Use the NYX AIDL service
-    if (widget.selectedPrinter!.isInternal) {
-      // Wait for hardware instead of dropping the print job
-      while (_isPrintingHardware) {
-        await Future.delayed(const Duration(milliseconds: 300));
-      }
-      _isPrintingHardware = true;
-      try {
-        var ret = await NyxPrinter.getPrinterStatus();
-        if (ret == PrinterStatus.SDK_OK) {
-          
-          await NyxPrinter.printEscposData(bytes);
-          
-          debugPrint('Printed via NYX AIDL service (ESC/POS)');
-        } else {
-          debugPrint('NYX printer service not available.');
-        }
-      } catch (e) {
-        debugPrint('NYX printer error: $e');
-      } finally {
-        _isPrintingHardware = false;
-      }
-      return; // Do not fallback to bluetooth if they explicitly chose Internal
-    }
-
-    // 2. Bluetooth/USB
-    final selectedPrinter = widget.selectedPrinter!;
-    
-    // Prevent overlapping BT connections which permanently freeze the Android BT stack
-    while (_isPrintingHardware) {
-      await Future.delayed(const Duration(milliseconds: 300));
-    }
-    _isPrintingHardware = true;
-
-    unawaited(
-      Future(() async {
-        try {
-          var printerManager = PrinterManager.instance;
-          final device = selectedPrinter.device!;
-          final type = selectedPrinter.type!;
-
-          dynamic inputParams;
-          if (type == PrinterType.usb) {
-            inputParams = UsbPrinterInput(
-              name: device.name,
-              vendorId: device.vendorId,
-              productId: device.productId,
-            );
-          } else if (type == PrinterType.bluetooth) {
-            inputParams = BluetoothPrinterInput(
-              name: device.name,
-              address: device.address!,
-              isBle: false,
-              autoConnect: false,
-            );
-          } else {
-            _isPrintingHardware = false;
-            return;
-          }
-
-          // Clean disconnect before fresh connect
-          try { await printerManager.disconnect(type: type); } catch (_) {}
-          await Future.delayed(const Duration(milliseconds: 200));
-
-          bool isConnected = false;
-          try {
-            isConnected = (await printerManager.connect(
-              type: type,
-              model: inputParams,
-            ).timeout(const Duration(seconds: 8))) == true;
-          } catch (e) {
-            debugPrint('BT connect timeout/error: $e');
-          }
-
-          if (isConnected) {
-            await printerManager.send(type: type, bytes: receiptBytes)
-              .timeout(const Duration(seconds: 10));
-            debugPrint('BT/USB print sent successfully.');
-          } else {
-            debugPrint('Failed to connect to BT/USB printer.');
-          }
-          
-          // ALWAYS clean disconnect after printing to prevent the Android 
-          // Bluetooth SPP socket from hanging on the next print attempt.
-          try {
-            await PrinterManager.instance.disconnect(type: type);
-          } catch (_) {}
-          
-          // Release hardware lock on success
-          _isPrintingHardware = false;
-        } catch (e) {
-          debugPrint('BT/USB print isolate error: $e');
-          // Always clean up
-          try {
-            await PrinterManager.instance.disconnect(
-              type: selectedPrinter.type!,
-            );
-          } catch (_) {}
-          _isPrintingHardware = false; // Release hardware lock
-        }
-      }).timeout(
-        const Duration(seconds: 20),
-        onTimeout: () {
-          debugPrint('PRINT TIMEOUT: Entire BT print job exceeded 20s, killed.');
-          try { PrinterManager.instance.disconnect(type: selectedPrinter.type!); } catch (_) {}
-          _isPrintingHardware = false; // Release hardware lock
-        },
-      ),
+    await PrinterHelper.printBillReceipt(
+      widget.selectedPrinter,
+      record,
+      isReprint: false,
     );
   }
 
@@ -966,6 +849,28 @@ class _PosScreenState extends State<PosScreen> {
           Container(
             margin: const EdgeInsets.symmetric(vertical: 8),
             decoration: BoxDecoration(
+              color: Colors.green.shade50,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: IconButton(
+              icon: Icon(Icons.receipt_long, color: Colors.green.shade800),
+              tooltip: 'Shift Bills & Reprint',
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => BillHistoryScreen(
+                      selectedPrinter: widget.selectedPrinter,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 8),
+            decoration: BoxDecoration(
               color: Colors.orange.shade50,
               borderRadius: BorderRadius.circular(12),
             ),
@@ -1042,7 +947,13 @@ class _PosScreenState extends State<PosScreen> {
                       final prefs = await SharedPreferences.getInstance();
                       final storeId = prefs.getString('store_id') ?? '';
                       final terminalId = prefs.getString('terminal_id') ?? '';
-                      await PrinterHelper.printShiftReceipt(widget.selectedPrinter, false, closingCash, storeId, terminalId);
+                      await PrinterHelper.printShiftReceipt(
+                        widget.selectedPrinter,
+                        false,
+                        closingCash,
+                        storeId,
+                        terminalId,
+                      );
                     } catch (e) {
                       debugPrint('Error printing close receipt: $e');
                     }
@@ -1419,6 +1330,54 @@ class _PosScreenState extends State<PosScreen> {
               ),
               child: Column(
                 children: [
+                  if (_roundOffAmount.abs() > 0.001) ...[
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Subtotal',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.grey.shade600,
+                          ),
+                        ),
+                        Text(
+                          '₹${_subtotal.toStringAsFixed(2)}',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.grey.shade800,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Round Off',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.grey.shade600,
+                          ),
+                        ),
+                        Text(
+                          '${_roundOffAmount > 0 ? '+' : ''}₹${_roundOffAmount.toStringAsFixed(2)}',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: _roundOffAmount > 0
+                                ? Colors.green.shade700
+                                : Colors.orange.shade800,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const Divider(height: 20),
+                  ],
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
@@ -1483,11 +1442,15 @@ class _PosScreenState extends State<PosScreen> {
 
 class SplitPaymentDialog extends StatefulWidget {
   final double totalAmount;
+  final double? subtotal;
+  final double? roundOff;
   final Function(double cashAmount, double upiAmount) onConfirm;
 
   const SplitPaymentDialog({
     super.key,
     required this.totalAmount,
+    this.subtotal,
+    this.roundOff,
     required this.onConfirm,
   });
 
@@ -1593,6 +1556,55 @@ class _SplitPaymentDialogState extends State<SplitPaymentDialog> {
                 ),
                 child: Column(
                   children: [
+                    if (widget.roundOff != null &&
+                        widget.roundOff!.abs() > 0.001) ...[
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Subtotal:',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.blue.shade700,
+                            ),
+                          ),
+                          Text(
+                            'Rs ${(widget.subtotal ?? (widget.totalAmount - widget.roundOff!)).toStringAsFixed(2)}',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.blue.shade900,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Round Off:',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.blue.shade700,
+                            ),
+                          ),
+                          Text(
+                            '${widget.roundOff! > 0 ? '+' : ''}Rs ${widget.roundOff!.toStringAsFixed(2)}',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: widget.roundOff! > 0
+                                  ? Colors.green.shade800
+                                  : Colors.orange.shade900,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                    ],
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [

@@ -32,6 +32,9 @@ class _BarcodePrintScreenState extends State<BarcodePrintScreen> {
   String _currentStoreId = '';
   String _currentStoreName = '';
 
+  bool _hideMrp = false;
+  bool _hideCompanyName = false;
+
   Timer? _debounceTimer;
   List<Product> _suggestions = [];
 
@@ -45,6 +48,8 @@ class _BarcodePrintScreenState extends State<BarcodePrintScreen> {
     final prefs = await SharedPreferences.getInstance();
     final sId = prefs.getString('store_id') ?? '';
     var sName = prefs.getString('store_name') ?? '';
+    _hideMrp = prefs.getBool('hide_mrp') ?? false;
+    _hideCompanyName = prefs.getBool('hide_company_name') ?? false;
 
     if (sName.isEmpty && sId.isNotEmpty) {
       try {
@@ -588,6 +593,10 @@ class _BarcodePrintScreenState extends State<BarcodePrintScreen> {
       return;
     }
 
+    final prefs = await SharedPreferences.getInstance();
+    _hideMrp = prefs.getBool('hide_mrp') ?? false;
+    _hideCompanyName = prefs.getBool('hide_company_name') ?? false;
+
     setState(() => _isPrinting = true);
     try {
       bool success = false;
@@ -596,24 +605,32 @@ class _BarcodePrintScreenState extends State<BarcodePrintScreen> {
           widget.selectedPrinter,
           _product!,
           copies: _copies,
+          hideCompanyName: _hideCompanyName,
+          hideMrp: _hideMrp,
         );
       } else if (printMode == 2) {
         success = await PrinterHelper.printDiscountLabel(
           widget.selectedPrinter,
           _product!,
           copies: _copies,
+          hideCompanyName: _hideCompanyName,
+          hideMrp: _hideMrp,
         );
       } else if (printMode == 3) {
         success = await PrinterHelper.printBogoLabel(
           widget.selectedPrinter,
           _product!,
           copies: _copies,
+          hideCompanyName: _hideCompanyName,
+          hideMrp: _hideMrp,
         );
       } else {
         success = await PrinterHelper.printShelfLabel(
           widget.selectedPrinter,
           _product!,
           copies: _copies,
+          hideCompanyName: _hideCompanyName,
+          hideMrp: _hideMrp,
         );
       }
 
@@ -1491,6 +1508,7 @@ class _BarcodePrintScreenState extends State<BarcodePrintScreen> {
 
   /// Store brand header displayed on top of each tag in small capital
   Widget _buildStoreHeader() {
+    if (_hideCompanyName) return const SizedBox.shrink();
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2.5),
       margin: const EdgeInsets.only(bottom: 4),
@@ -1614,11 +1632,13 @@ class _BarcodePrintScreenState extends State<BarcodePrintScreen> {
                 text: '₹${p.saleRate.toStringAsFixed(2)}',
                 style: const TextStyle(color: Color(0xFF16A34A), fontWeight: FontWeight.w900, fontSize: 18),
               ),
-              const TextSpan(text: ' , MRP: '),
-              TextSpan(
-                text: '₹${p.mrp.toStringAsFixed(2)}',
-                style: const TextStyle(color: Colors.black87, fontWeight: FontWeight.w800),
-              ),
+              if (!_hideMrp) ...[
+                const TextSpan(text: ' , MRP: '),
+                TextSpan(
+                  text: '₹${p.mrp.toStringAsFixed(2)}',
+                  style: const TextStyle(color: Colors.black87, fontWeight: FontWeight.w800),
+                ),
+              ],
             ],
           ),
         ),
@@ -1671,19 +1691,20 @@ class _BarcodePrintScreenState extends State<BarcodePrintScreen> {
         const SizedBox(height: 5),
 
         // 3. ONLY MRP for BOGO (Strictly DO NOT show sale rate!)
-        RichText(
-          textAlign: TextAlign.center,
-          text: TextSpan(
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87),
-            children: [
-              const TextSpan(text: 'MRP: '),
-              TextSpan(
-                text: '₹${p.mrp.toStringAsFixed(2)}',
-                style: const TextStyle(color: Color(0xFF16A34A), fontWeight: FontWeight.w900, fontSize: 22),
-              ),
-            ],
+        if (!_hideMrp)
+          RichText(
+            textAlign: TextAlign.center,
+            text: TextSpan(
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87),
+              children: [
+                const TextSpan(text: 'MRP: '),
+                TextSpan(
+                  text: '₹${p.mrp.toStringAsFixed(2)}',
+                  style: const TextStyle(color: Color(0xFF16A34A), fontWeight: FontWeight.w900, fontSize: 22),
+                ),
+              ],
+            ),
           ),
-        ),
       ],
     );
   }
@@ -1725,16 +1746,18 @@ class _BarcodePrintScreenState extends State<BarcodePrintScreen> {
         const SizedBox(height: 2),
 
         // 3. MRP (Larger text)
-        Text(
-          'MRP: ₹${p.mrp.toStringAsFixed(2)}',
-          textAlign: TextAlign.center,
-          style: const TextStyle(
-            fontSize: 16,
-            color: Color(0xFF475569),
-            fontWeight: FontWeight.w800,
+        if (!_hideMrp) ...[
+          Text(
+            'MRP: ₹${p.mrp.toStringAsFixed(2)}',
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 16,
+              color: Color(0xFF475569),
+              fontWeight: FontWeight.w800,
+            ),
           ),
-        ),
-        const SizedBox(height: 4),
+          const SizedBox(height: 4),
+        ],
         Divider(color: Colors.grey.shade300, thickness: 1, height: 10),
       ],
     );
@@ -1770,12 +1793,14 @@ class _BarcodePrintScreenState extends State<BarcodePrintScreen> {
                 text: '₹${p.saleRate.toStringAsFixed(2)}',
                 style: const TextStyle(color: Color(0xFF16A34A), fontWeight: FontWeight.w900),
               ),
-              const TextSpan(text: '  (MRP: '),
-              TextSpan(
-                text: '₹${p.mrp.toStringAsFixed(2)}',
-                style: const TextStyle(color: Color(0xFF475569)),
-              ),
-              const TextSpan(text: ')'),
+              if (!_hideMrp) ...[
+                const TextSpan(text: '  (MRP: '),
+                TextSpan(
+                  text: '₹${p.mrp.toStringAsFixed(2)}',
+                  style: const TextStyle(color: Color(0xFF475569)),
+                ),
+                const TextSpan(text: ')'),
+              ],
             ],
           ),
         ),

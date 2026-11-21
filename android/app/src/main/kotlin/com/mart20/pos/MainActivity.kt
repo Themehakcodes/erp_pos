@@ -1,4 +1,4 @@
-package com.example.erp_pos
+package com.mart20.pos
 
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine

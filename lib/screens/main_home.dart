@@ -8,6 +8,7 @@ import 'pos_screen.dart';
 import 'sales_screen.dart';
 import 'settings_tab.dart';
 import 'barcode_print_screen.dart';
+import 'bill_history_screen.dart';
 
 class MainHome extends StatefulWidget {
   final double openingBalance;
@@ -139,6 +140,21 @@ class _MainHomeState extends State<MainHome> with WidgetsBindingObserver {
               title: const Text('POS Terminal', style: TextStyle(fontWeight: FontWeight.bold)),
               onTap: () {
                 Navigator.pop(context); // Close drawer
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.receipt_long, color: Colors.black87),
+              title: const Text('Bill History & Reprint', style: TextStyle(fontWeight: FontWeight.bold)),
+              onTap: () {
+                Navigator.pop(context); // Close drawer
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => BillHistoryScreen(
+                      selectedPrinter: _selectedPrinter,
+                    ),
+                  ),
+                );
               },
             ),
             ListTile(

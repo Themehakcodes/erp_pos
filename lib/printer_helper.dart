@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_pos_printer_platform_image_3/flutter_pos_printer_platform_image_3.dart';
 import 'package:nyx_printer_flutter/nyx_printer.dart';
 import 'package:nyx_printer_flutter/nyx_printer_definition.dart';
 
 import 'dart:async';
 import 'dart:typed_data';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'models/models.dart';
 
 class PrinterHelper {
@@ -260,17 +262,19 @@ class PrinterHelper {
     return success;
   }
 
-  static List<int> generateShelfLabelBytes(Product product) {
+  static List<int> generateShelfLabelBytes(Product product, {bool hideCompanyName = false, bool hideMrp = false}) {
     List<int> bytes = [];
     bytes.addAll([0x1B, 0x40]); // Init
     bytes.addAll([0x1B, 0x61, 0x01]); // Center align
 
     // Top Store Header in small capital (Font B, Bold)
-    bytes.addAll([0x1B, 0x4D, 0x01]); // Font B (condensed small font)
-    bytes.addAll([0x1B, 0x45, 0x01]); // Bold on
-    bytes.addAll("KCSUPERMARKET\n".codeUnits);
-    bytes.addAll([0x1B, 0x4D, 0x00]); // Reset to Font A
-    bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+    if (!hideCompanyName) {
+      bytes.addAll([0x1B, 0x4D, 0x01]); // Font B (condensed small font)
+      bytes.addAll([0x1B, 0x45, 0x01]); // Bold on
+      bytes.addAll("KCSUPERMARKET\n".codeUnits);
+      bytes.addAll([0x1B, 0x4D, 0x00]); // Reset to Font A
+      bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+    }
 
     // Product Name
     bytes.addAll([0x1B, 0x45, 0x01]); // Bold
@@ -285,8 +289,10 @@ class PrinterHelper {
     bytes.addAll("Rs ${product.saleRate.toStringAsFixed(2)}\n".codeUnits);
 
     // MRP at bottom (Double height for readability)
-    bytes.addAll([0x1D, 0x21, 0x01]); // Double height
-    bytes.addAll("MRP: Rs ${product.mrp.toStringAsFixed(2)}\n".codeUnits);
+    if (!hideMrp) {
+      bytes.addAll([0x1D, 0x21, 0x01]); // Double height
+      bytes.addAll("MRP: Rs ${product.mrp.toStringAsFixed(2)}\n".codeUnits);
+    }
     bytes.addAll([0x1D, 0x21, 0x00]); // Normal size
     bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
     bytes.addAll("--------------------------------\n".codeUnits);
@@ -297,17 +303,19 @@ class PrinterHelper {
     return bytes;
   }
 
-  static List<int> generateBarcodeAndLabelBytes(Product product) {
+  static List<int> generateBarcodeAndLabelBytes(Product product, {bool hideCompanyName = false, bool hideMrp = false}) {
     List<int> bytes = [];
     bytes.addAll([0x1B, 0x40]); // Init
     bytes.addAll([0x1B, 0x61, 0x01]); // Center align
 
     // Top Store Header in small capital (Font B, Bold)
-    bytes.addAll([0x1B, 0x4D, 0x01]); // Font B (condensed small font)
-    bytes.addAll([0x1B, 0x45, 0x01]); // Bold on
-    bytes.addAll("KCSUPERMARKET\n".codeUnits);
-    bytes.addAll([0x1B, 0x4D, 0x00]); // Reset to Font A
-    bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+    if (!hideCompanyName) {
+      bytes.addAll([0x1B, 0x4D, 0x01]); // Font B (condensed small font)
+      bytes.addAll([0x1B, 0x45, 0x01]); // Bold on
+      bytes.addAll("KCSUPERMARKET\n".codeUnits);
+      bytes.addAll([0x1B, 0x4D, 0x00]); // Reset to Font A
+      bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+    }
 
     // Product Name
     bytes.addAll([0x1B, 0x45, 0x01]); // Bold
@@ -318,7 +326,11 @@ class PrinterHelper {
     // Price & MRP row (Bold, Double height)
     bytes.addAll([0x1B, 0x45, 0x01]); // Bold
     bytes.addAll([0x1D, 0x21, 0x01]); // Double height
-    bytes.addAll("RATE: Rs ${product.saleRate.toStringAsFixed(2)} (MRP: Rs ${product.mrp.toStringAsFixed(2)})\n\n".codeUnits);
+    if (hideMrp) {
+      bytes.addAll("RATE: Rs ${product.saleRate.toStringAsFixed(2)}\n\n".codeUnits);
+    } else {
+      bytes.addAll("RATE: Rs ${product.saleRate.toStringAsFixed(2)} (MRP: Rs ${product.mrp.toStringAsFixed(2)})\n\n".codeUnits);
+    }
     bytes.addAll([0x1D, 0x21, 0x00]); // Normal size
     bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
 
@@ -345,27 +357,35 @@ class PrinterHelper {
     return bytes;
   }
 
-  static Future<bool> printShelfLabel(SelectedPrinter? printer, Product product, {int copies = 1}) async {
-    final bytes = generateShelfLabelBytes(product);
+  static Future<bool> printShelfLabel(SelectedPrinter? printer, Product product, {int copies = 1, bool? hideCompanyName, bool? hideMrp}) async {
+    final prefs = await SharedPreferences.getInstance();
+    final hideCompany = hideCompanyName ?? (prefs.getBool('hide_company_name') ?? false);
+    final hidePriceMrp = hideMrp ?? (prefs.getBool('hide_mrp') ?? false);
+    final bytes = generateShelfLabelBytes(product, hideCompanyName: hideCompany, hideMrp: hidePriceMrp);
     return _sendPrintData(printer, bytes, copies: copies);
   }
 
-  static Future<bool> printBarcodeAndLabel(SelectedPrinter? printer, Product product, {int copies = 1}) async {
-    final bytes = generateBarcodeAndLabelBytes(product);
+  static Future<bool> printBarcodeAndLabel(SelectedPrinter? printer, Product product, {int copies = 1, bool? hideCompanyName, bool? hideMrp}) async {
+    final prefs = await SharedPreferences.getInstance();
+    final hideCompany = hideCompanyName ?? (prefs.getBool('hide_company_name') ?? false);
+    final hidePriceMrp = hideMrp ?? (prefs.getBool('hide_mrp') ?? false);
+    final bytes = generateBarcodeAndLabelBytes(product, hideCompanyName: hideCompany, hideMrp: hidePriceMrp);
     return _sendPrintData(printer, bytes, copies: copies);
   }
 
-  static List<int> generateDiscountLabelBytes(Product product) {
+  static List<int> generateDiscountLabelBytes(Product product, {bool hideCompanyName = false, bool hideMrp = false}) {
     List<int> bytes = [];
     bytes.addAll([0x1B, 0x40]); // Init
     bytes.addAll([0x1B, 0x61, 0x01]); // Center align
 
     // Top Store Header in small capital (Font B, Bold)
-    bytes.addAll([0x1B, 0x4D, 0x01]); // Font B (condensed small font)
-    bytes.addAll([0x1B, 0x45, 0x01]); // Bold on
-    bytes.addAll("KCSUPERMARKET\n".codeUnits);
-    bytes.addAll([0x1B, 0x4D, 0x00]); // Reset to Font A
-    bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+    if (!hideCompanyName) {
+      bytes.addAll([0x1B, 0x4D, 0x01]); // Font B (condensed small font)
+      bytes.addAll([0x1B, 0x45, 0x01]); // Bold on
+      bytes.addAll("KCSUPERMARKET\n".codeUnits);
+      bytes.addAll([0x1B, 0x4D, 0x00]); // Reset to Font A
+      bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+    }
 
     final double mrp = product.mrp;
     final double sale = product.saleRate;
@@ -399,7 +419,11 @@ class PrinterHelper {
     // Line 3: Sale Rate , MRP (Bold, Double height - larger rates text)
     bytes.addAll([0x1B, 0x45, 0x01]); // Bold on
     bytes.addAll([0x1D, 0x21, 0x01]); // Double height
-    bytes.addAll("SALE: Rs ${sale.toStringAsFixed(2)} , MRP: Rs ${mrp.toStringAsFixed(2)}\n".codeUnits);
+    if (hideMrp) {
+      bytes.addAll("SALE: Rs ${sale.toStringAsFixed(2)}\n".codeUnits);
+    } else {
+      bytes.addAll("SALE: Rs ${sale.toStringAsFixed(2)} , MRP: Rs ${mrp.toStringAsFixed(2)}\n".codeUnits);
+    }
     bytes.addAll([0x1D, 0x21, 0x00]); // Normal size
     bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
 
@@ -409,25 +433,30 @@ class PrinterHelper {
     return bytes;
   }
 
-  static Future<bool> printDiscountLabel(SelectedPrinter? printer, Product product, {int copies = 1}) async {
-    final bytes = generateDiscountLabelBytes(product);
+  static Future<bool> printDiscountLabel(SelectedPrinter? printer, Product product, {int copies = 1, bool? hideCompanyName, bool? hideMrp}) async {
+    final prefs = await SharedPreferences.getInstance();
+    final hideCompany = hideCompanyName ?? (prefs.getBool('hide_company_name') ?? false);
+    final hidePriceMrp = hideMrp ?? (prefs.getBool('hide_mrp') ?? false);
+    final bytes = generateDiscountLabelBytes(product, hideCompanyName: hideCompany, hideMrp: hidePriceMrp);
     return _sendPrintData(printer, bytes, copies: copies);
   }
 
-  static List<int> generateBogoLabelBytes(Product product) {
+  static List<int> generateBogoLabelBytes(Product product, {bool hideCompanyName = false, bool hideMrp = false}) {
     if (!product.isBogo) {
-      return generateDiscountLabelBytes(product);
+      return generateDiscountLabelBytes(product, hideCompanyName: hideCompanyName, hideMrp: hideMrp);
     }
     List<int> bytes = [];
     bytes.addAll([0x1B, 0x40]); // Init
     bytes.addAll([0x1B, 0x61, 0x01]); // Center align
 
     // Top Store Header in small capital (Font B, Bold)
-    bytes.addAll([0x1B, 0x4D, 0x01]); // Font B (condensed small font)
-    bytes.addAll([0x1B, 0x45, 0x01]); // Bold on
-    bytes.addAll("KCSUPERMARKET\n".codeUnits);
-    bytes.addAll([0x1B, 0x4D, 0x00]); // Reset to Font A
-    bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+    if (!hideCompanyName) {
+      bytes.addAll([0x1B, 0x4D, 0x01]); // Font B (condensed small font)
+      bytes.addAll([0x1B, 0x45, 0x01]); // Bold on
+      bytes.addAll("KCSUPERMARKET\n".codeUnits);
+      bytes.addAll([0x1B, 0x4D, 0x00]); // Reset to Font A
+      bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+    }
 
     final double mrp = product.mrp;
 
@@ -447,11 +476,13 @@ class PrinterHelper {
     bytes.addAll("--------------------------------\n".codeUnits);
 
     // Line 3: ONLY MRP for BOGO (Strictly DO NOT show sale rate!)
-    bytes.addAll([0x1B, 0x45, 0x01]); // Bold on
-    bytes.addAll([0x1D, 0x21, 0x01]); // Double height
-    bytes.addAll("MRP: Rs ${mrp.toStringAsFixed(2)}\n".codeUnits);
-    bytes.addAll([0x1D, 0x21, 0x00]); // Normal size
-    bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+    if (!hideMrp) {
+      bytes.addAll([0x1B, 0x45, 0x01]); // Bold on
+      bytes.addAll([0x1D, 0x21, 0x01]); // Double height
+      bytes.addAll("MRP: Rs ${mrp.toStringAsFixed(2)}\n".codeUnits);
+      bytes.addAll([0x1D, 0x21, 0x00]); // Normal size
+      bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+    }
 
     // Minimal feed & cut for shelf rack (matches standard shelf label height)
     bytes.addAll("\n".codeUnits);
@@ -459,13 +490,111 @@ class PrinterHelper {
     return bytes;
   }
 
-  static Future<bool> printBogoLabel(SelectedPrinter? printer, Product product, {int copies = 1}) async {
+  static Future<bool> printBogoLabel(SelectedPrinter? printer, Product product, {int copies = 1, bool? hideCompanyName, bool? hideMrp}) async {
     if (!product.isBogo) {
       debugPrint('Cannot print BOGO label: sale rate is not half of MRP');
       return false;
     }
-    final bytes = generateBogoLabelBytes(product);
+    final prefs = await SharedPreferences.getInstance();
+    final hideCompany = hideCompanyName ?? (prefs.getBool('hide_company_name') ?? false);
+    final hidePriceMrp = hideMrp ?? (prefs.getBool('hide_mrp') ?? false);
+    final bytes = generateBogoLabelBytes(product, hideCompanyName: hideCompany, hideMrp: hidePriceMrp);
     return _sendPrintData(printer, bytes, copies: copies);
+  }
+
+  /// Generates ESC/POS thermal receipt bytes matching POS bill template exactly.
+  /// If [isReprint] is true, shows '*** DUPLICATE REPRINT ***' in center bold at the very top.
+  static List<int> generateReceiptBytes(BillReceiptData bill, {bool isReprint = false}) {
+    final List<int> bytes = [];
+    bytes.addAll([0x1B, 0x40]); // ESC @ (Initialize)
+    bytes.addAll([0x1B, 0x61, 0x01]); // Center align
+
+    // UPPER DUPLICATE REPRINT (Only if isReprint is true)
+    if (isReprint) {
+      bytes.addAll([0x1B, 0x45, 0x01]); // Bold on
+      bytes.addAll("*** DUPLICATE REPRINT ***\n\n".codeUnits);
+      bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+    }
+
+    bytes.addAll([0x1B, 0x45, 0x01]); // Bold on
+    bytes.addAll([0x1D, 0x21, 0x11]); // Double width/height
+    bytes.addAll("${bill.invoiceNo}\n\n".codeUnits);
+    bytes.addAll([0x1D, 0x21, 0x00]); // Normal size
+    bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+
+    final dateDisplay = bill.dateStr.isNotEmpty
+        ? (bill.dateStr.length > 16 ? bill.dateStr.substring(0, 16) : bill.dateStr)
+        : DateTime.now().toString().substring(0, 16);
+
+    bytes.addAll("Date: $dateDisplay\n".codeUnits);
+    bytes.addAll([0x1B, 0x61, 0x00]); // Left align
+    bytes.addAll("--------------------------------\n".codeUnits);
+
+    for (var item in bill.items) {
+      String nameLine = "${item.name} x${item.quantityString}";
+      String priceLine = "Rs ${item.lineTotal.toStringAsFixed(2)}";
+      int paddingSize = 32 - nameLine.length - priceLine.length;
+      if (paddingSize < 1) paddingSize = 1;
+      String padding = " " * paddingSize;
+      bytes.addAll("$nameLine$padding$priceLine\n".codeUnits);
+    }
+
+    bytes.addAll("--------------------------------\n".codeUnits);
+
+    final double subtotal = bill.subtotal;
+    final double roundOff = bill.roundOff;
+
+    if (roundOff.abs() > 0.001) {
+      String subtotalTitle = "SUBTOTAL";
+      String subtotalVal = "Rs ${subtotal.toStringAsFixed(2)}";
+      int padSub = 32 - subtotalTitle.length - subtotalVal.length;
+      bytes.addAll(
+        "$subtotalTitle${" " * (padSub > 0 ? padSub : 1)}$subtotalVal\n".codeUnits,
+      );
+
+      String roundTitle = "ROUND OFF";
+      String sign = roundOff > 0 ? "+" : "";
+      String roundVal = "$sign${roundOff.toStringAsFixed(2)}";
+      int padRound = 32 - roundTitle.length - roundVal.length;
+      bytes.addAll(
+        "$roundTitle${" " * (padRound > 0 ? padRound : 1)}$roundVal\n".codeUnits,
+      );
+    }
+
+    bytes.addAll([0x1B, 0x45, 0x01]); // Bold on
+    String totalTitle = "TOTAL";
+    String totalValue = "Rs ${bill.totalAmount.toStringAsFixed(2)}";
+    int pad1 = 32 - totalTitle.length - totalValue.length;
+    bytes.addAll(
+      "$totalTitle${" " * (pad1 > 0 ? pad1 : 1)}$totalValue\n".codeUnits,
+    );
+    bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+
+    String methodTitle = "METHOD";
+    String methodVal = bill.method.isNotEmpty ? bill.method : "Cash";
+    int pad2 = 32 - methodTitle.length - methodVal.length;
+    bytes.addAll(
+      "$methodTitle${" " * (pad2 > 0 ? pad2 : 1)}$methodVal\n".codeUnits,
+    );
+
+    bytes.addAll("--------------------------------\n".codeUnits);
+    bytes.addAll([0x1B, 0x61, 0x01]); // Center align
+    bytes.addAll([0x1B, 0x45, 0x01]); // Bold on
+    bytes.addAll("Thank You!\n".codeUnits);
+    bytes.addAll([0x1B, 0x45, 0x00]); // Bold off
+    bytes.addAll("Please visit again\n\n\n\n".codeUnits);
+    bytes.addAll([0x1D, 0x56, 0x41, 0x00]); // Cut
+    return bytes;
+  }
+
+  /// Prints or reprints a complete BillReceiptData object
+  static Future<bool> printBillReceipt(
+    SelectedPrinter? printer,
+    BillReceiptData bill, {
+    bool isReprint = false,
+  }) async {
+    final bytes = generateReceiptBytes(bill, isReprint: isReprint);
+    return await _sendPrintData(printer, bytes, copies: 1);
   }
 
   static Future<bool> _sendPrintData(SelectedPrinter? printer, List<int> bytes, {int copies = 1}) async {
@@ -475,24 +604,42 @@ class PrinterHelper {
     }
     if (copies < 1) copies = 1;
 
-    // 1. Internal NYX AIDL Printer
+    // 1. Internal Printer (NYX AIDL or Atpos 1008 Serial)
     if (printer.isInternal) {
       while (_isPrintingHardware) {
         await Future.delayed(const Duration(milliseconds: 200));
       }
       _isPrintingHardware = true;
       try {
-        var ret = await NyxPrinter.getPrinterStatus();
-        if (ret == PrinterStatus.SDK_OK) {
-          final uint8 = Uint8List.fromList(bytes);
+        final uint8 = Uint8List.fromList(bytes);
+
+        // Try NYX AIDL service
+        try {
+          var ret = await NyxPrinter.getPrinterStatus();
+          if (ret == PrinterStatus.SDK_OK) {
+            for (int i = 0; i < copies; i++) {
+              await NyxPrinter.printEscposData(uint8);
+              if (copies > 1) await Future.delayed(const Duration(milliseconds: 150));
+            }
+            return true;
+          }
+        } catch (_) {}
+
+        // Fallback to internal native serial printer (Atpos 1008 via /dev/ttyS*)
+        try {
+          const nativeChannel = MethodChannel('pos_printer');
           for (int i = 0; i < copies; i++) {
-            await NyxPrinter.printEscposData(uint8);
-            if (copies > 1) await Future.delayed(const Duration(milliseconds: 150));
+            final res = await nativeChannel.invokeMethod('printBytes', {'bytes': uint8});
+            if (res == true) {
+              if (copies > 1) await Future.delayed(const Duration(milliseconds: 150));
+            }
           }
           return true;
+        } catch (e) {
+          debugPrint('Internal serial printer error: $e');
         }
       } catch (e) {
-        debugPrint('NYX label print error: $e');
+        debugPrint('Internal print error: $e');
       } finally {
         _isPrintingHardware = false;
       }

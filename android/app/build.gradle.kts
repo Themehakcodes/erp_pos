@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.erp_pos"
+    namespace = "com.mart20.pos"
     compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
@@ -15,8 +15,8 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.erp_pos"
+        // Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
+        applicationId = "com.mart20.pos"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
@@ -43,4 +43,33 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+tasks.matching { it.name == "assembleRelease" }.configureEach {
+    doLast {
+        val buildDir = project.layout.buildDirectory.asFile.get()
+        val vName = flutter.versionName ?: "1.0.1"
+        val vCode = flutter.versionCode ?: 3
+        val apkNames = listOf(
+            "20MartPOS-v${vName}-b${vCode}-release.apk",
+            "20MartPOS-v${vName}+${vCode}-release.apk"
+        )
+
+        val gradleReleaseApk = File(buildDir, "outputs/apk/release/app-release.apk")
+        if (gradleReleaseApk.exists()) {
+            val flutterApkDir = File(buildDir, "outputs/flutter-apk")
+            flutterApkDir.mkdirs()
+
+            println("\n========================================================")
+            println("MDM RELEASE APKS GENERATED (Version: $vName, Build: $vCode):")
+            apkNames.forEach { name ->
+                val destGradle = File(gradleReleaseApk.parentFile, name)
+                gradleReleaseApk.copyTo(destGradle, overwrite = true)
+                val destFlutter = File(flutterApkDir, name)
+                gradleReleaseApk.copyTo(destFlutter, overwrite = true)
+                println("-> ${destFlutter.absolutePath}")
+            }
+            println("========================================================\n")
+        }
+    }
 }

@@ -1,10 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_pos_printer_platform_image_3/flutter_pos_printer_platform_image_3.dart';
-import 'dart:convert';
 import 'dart:async';
 import '../api_service.dart';
 import '../models/models.dart';
@@ -25,8 +22,6 @@ class SettingsTab extends StatefulWidget {
 }
 
 class _SettingsTabState extends State<SettingsTab> {
-  static const _printerChannel = MethodChannel('pos_printer');
-
   final List<PrinterDevice> _usbPrinters = [];
   final List<PrinterDevice> _btPrinters = [];
   bool _isScanning = false;
@@ -35,10 +30,37 @@ class _SettingsTabState extends State<SettingsTab> {
   StreamSubscription? _btSubscription;
   bool _isTesting = false;
   String _testResult = '';
+
+  bool _hideMrp = false;
+  bool _hideCompanyName = false;
+
   @override
   void initState() {
     super.initState();
     _loadDeviceId();
+    _loadPreferences();
+  }
+
+  Future<void> _loadPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _hideMrp = prefs.getBool('hide_mrp') ?? false;
+        _hideCompanyName = prefs.getBool('hide_company_name') ?? false;
+      });
+    }
+  }
+
+  Future<void> _setHideMrp(bool val) async {
+    setState(() => _hideMrp = val);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('hide_mrp', val);
+  }
+
+  Future<void> _setHideCompanyName(bool val) async {
+    setState(() => _hideCompanyName = val);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('hide_company_name', val);
   }
 
   Future<void> _loadDeviceId() async {
@@ -221,7 +243,7 @@ class _SettingsTabState extends State<SettingsTab> {
                       ListTile(
                         contentPadding: const EdgeInsets.symmetric(horizontal: 4),
                         leading: const Icon(Icons.bluetooth_connected, color: Colors.indigo),
-                        title: Text(widget.currentPrinter!.device!.name ?? 'Saved Bluetooth Device'),
+                        title: Text(widget.currentPrinter!.device!.name.isNotEmpty ? widget.currentPrinter!.device!.name : 'Saved Bluetooth Device'),
                         subtitle: Text('${widget.currentPrinter!.device!.address} (Saved)'),
                         trailing: const Icon(Icons.check_circle, color: Colors.indigo),
                         onTap: () => widget.onPrinterSelected(widget.currentPrinter!),
@@ -232,7 +254,7 @@ class _SettingsTabState extends State<SettingsTab> {
                       return ListTile(
                         contentPadding: const EdgeInsets.symmetric(horizontal: 4),
                         leading: const Icon(Icons.bluetooth, color: Colors.grey),
-                        title: Text(device.name ?? 'Unknown Device'),
+                        title: Text(device.name.isNotEmpty ? device.name : 'Unknown Device'),
                         subtitle: Text(device.address ?? ''),
                         onTap: () => widget.onPrinterSelected(SelectedPrinter(device: device, type: PrinterType.bluetooth)),
                       );
@@ -256,7 +278,7 @@ class _SettingsTabState extends State<SettingsTab> {
                       ListTile(
                         contentPadding: const EdgeInsets.symmetric(horizontal: 4),
                         leading: const Icon(Icons.usb, color: Colors.blue),
-                        title: Text(widget.currentPrinter!.device!.name ?? 'Saved USB Device'),
+                        title: Text(widget.currentPrinter!.device!.name.isNotEmpty ? widget.currentPrinter!.device!.name : 'Saved USB Device'),
                         subtitle: Text('Vendor: ${widget.currentPrinter!.device!.vendorId}  Product: ${widget.currentPrinter!.device!.productId} (Saved)'),
                         trailing: const Icon(Icons.check_circle, color: Colors.blue),
                         onTap: () => widget.onPrinterSelected(widget.currentPrinter!),
@@ -267,7 +289,7 @@ class _SettingsTabState extends State<SettingsTab> {
                       return ListTile(
                         contentPadding: const EdgeInsets.symmetric(horizontal: 4),
                         leading: const Icon(Icons.usb, color: Colors.grey),
-                        title: Text(device.name ?? 'Unknown USB'),
+                        title: Text(device.name.isNotEmpty ? device.name : 'Unknown USB'),
                         subtitle: Text('Vendor: ${device.vendorId}  Product: ${device.productId}'),
                         onTap: () => widget.onPrinterSelected(SelectedPrinter(device: device, type: PrinterType.usb)),
                       );
@@ -275,10 +297,36 @@ class _SettingsTabState extends State<SettingsTab> {
 
                     const Divider(height: 24),
 
-                    // --- DEVICE ID ---
+                    // --- LABEL PRINTING PREFERENCES ---
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      child: Text('LABEL PRINTING PREFERENCES', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.blueGrey.shade700)),
+                    ),
+                    SwitchListTile(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+                      title: const Text('Hide MRP on Labels', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+                      subtitle: const Text('Do not show or print MRP on barcodes and labels', style: TextStyle(fontSize: 12)),
+                      value: _hideMrp,
+                      activeThumbColor: Colors.blue.shade700,
+                      onChanged: _setHideMrp,
+                    ),
+                    SwitchListTile(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+                      title: const Text('Hide Company Name on Labels', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+                      subtitle: const Text('Do not show or print company name ("KCSUPERMARKET") on labels', style: TextStyle(fontSize: 12)),
+                      value: _hideCompanyName,
+                      activeThumbColor: Colors.blue.shade700,
+                      onChanged: _setHideCompanyName,
+                    ),
+
+                    const Divider(height: 24),
+
+                    // --- APP & DEVICE INFORMATION ---
+                    Text('APP & DEVICE INFORMATION', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.blueGrey.shade700)),
+                    const SizedBox(height: 6),
+                    Text('App Version: 1.0.1 (Build 3)', style: TextStyle(color: Colors.grey.shade800, fontSize: 13, fontWeight: FontWeight.w600)),
                     if (_deviceId != null) ...[
-                      Text('DEVICE INFORMATION', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.blueGrey.shade700)),
-                      const SizedBox(height: 6),
+                      const SizedBox(height: 4),
                       SelectableText('Device ID: $_deviceId', style: TextStyle(color: Colors.grey.shade700, fontSize: 13)),
                     ],
                   ],
