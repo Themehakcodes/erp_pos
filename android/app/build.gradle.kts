@@ -16,7 +16,7 @@ android {
 
     defaultConfig {
         // Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.mart20.pos"
+        applicationId = "com.mart20.pos.v2"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
@@ -48,8 +48,8 @@ flutter {
 tasks.matching { it.name == "assembleRelease" }.configureEach {
     doLast {
         val buildDir = project.layout.buildDirectory.asFile.get()
-        val vName = flutter.versionName ?: "1.0.1"
-        val vCode = flutter.versionCode ?: 3
+        val vName = flutter.versionName ?: "1.0.2"
+        val vCode = flutter.versionCode ?: 4
         val apkNames = listOf(
             "20MartPOS-v${vName}-b${vCode}-release.apk",
             "20MartPOS-v${vName}+${vCode}-release.apk"
