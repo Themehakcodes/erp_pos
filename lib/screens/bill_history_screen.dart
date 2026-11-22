@@ -222,8 +222,7 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
 
       // Add server shift sales
       for (final s in serverShiftSales) {
-        final invNo =
-            (s['invoice_number'] ?? s['invoice_no'] ?? '').toString();
+        final invNo = (s['invoice_number'] ?? s['invoice_no'] ?? '').toString();
         if (invNo.isEmpty) continue;
         if (!shiftMap.containsKey(invNo)) {
           shiftMap[invNo] = _convertSaleSummaryToBill(s);
@@ -247,8 +246,7 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
         todayMap[b.invoiceNo] = b;
       }
       for (final s in serverTodaySales) {
-        final invNo =
-            (s['invoice_number'] ?? s['invoice_no'] ?? '').toString();
+        final invNo = (s['invoice_number'] ?? s['invoice_no'] ?? '').toString();
         if (invNo.isNotEmpty && !todayMap.containsKey(invNo)) {
           todayMap[invNo] = _convertSaleSummaryToBill(s);
         }
@@ -272,9 +270,9 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error loading bills: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error loading bills: $e')));
       }
     }
   }
@@ -401,7 +399,8 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
   }
 
   Future<void> _reprintBill(BillReceiptData bill) async {
-    if (_printingInvoiceNo != null) return; // Prevent duplicate reprint calls while printing
+    if (_printingInvoiceNo != null)
+      return; // Prevent duplicate reprint calls while printing
 
     if (widget.selectedPrinter == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -424,8 +423,9 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
       // fetch full details from backend before printing!
       if (billToPrint.items.isEmpty && billToPrint.id.isNotEmpty) {
         try {
-          billToPrint =
-              await ApiService().getSaleInvoiceDetails(billToPrint.id);
+          billToPrint = await ApiService().getSaleInvoiceDetails(
+            billToPrint.id,
+          );
         } catch (e) {
           throw Exception("Could not fetch bill items: $e");
         }
@@ -441,9 +441,7 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
         if (success) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text(
-                'Reprinted ${bill.invoiceNo} successfully!',
-              ),
+              content: Text('Reprinted ${bill.invoiceNo} successfully!'),
               backgroundColor: Colors.green,
               behavior: SnackBarBehavior.floating,
               duration: const Duration(seconds: 2),
@@ -497,8 +495,9 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
     final activePrinterName = widget.selectedPrinter == null
         ? "No Printer"
         : (widget.selectedPrinter!.isInternal
-            ? "Internal POS Printer"
-            : (widget.selectedPrinter!.device?.name ?? "Bluetooth/USB Printer"));
+              ? "Internal POS Printer"
+              : (widget.selectedPrinter!.device?.name ??
+                    "Bluetooth/USB Printer"));
 
     return Scaffold(
       backgroundColor: const Color(0xFFF1F5F9),
@@ -551,13 +550,20 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Text('This Shift', style: TextStyle(fontWeight: FontWeight.bold)),
+                  const Text(
+                    'This Shift',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
                   const SizedBox(width: 6),
                   Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 7,
+                      vertical: 2,
+                    ),
                     decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.12),
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.primary.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Text(
@@ -576,11 +582,16 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Text('Today', style: TextStyle(fontWeight: FontWeight.bold)),
+                  const Text(
+                    'Today',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
                   const SizedBox(width: 6),
                   Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 7,
+                      vertical: 2,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.grey.shade200,
                       borderRadius: BorderRadius.circular(10),
@@ -601,12 +612,17 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Text('Offline', style: TextStyle(fontWeight: FontWeight.bold)),
+                  const Text(
+                    'Offline',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
                   if (_offlineBills.isNotEmpty) ...[
                     const SizedBox(width: 6),
                     Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 7, vertical: 2),
+                        horizontal: 7,
+                        vertical: 2,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.amber.shade700,
                         borderRadius: BorderRadius.circular(10),
@@ -713,7 +729,9 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
         if (synced > 0) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Successfully synced $synced offline bills to cloud!'),
+              content: Text(
+                'Successfully synced $synced offline bills to cloud!',
+              ),
               backgroundColor: Colors.green,
               behavior: SnackBarBehavior.floating,
             ),
@@ -790,7 +808,11 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
           ),
           child: Row(
             children: [
-              Icon(Icons.cloud_off_rounded, color: Colors.amber.shade800, size: 28),
+              Icon(
+                Icons.cloud_off_rounded,
+                color: Colors.amber.shade800,
+                size: 28,
+              ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
@@ -821,7 +843,10 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.amber.shade800,
                   foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 10,
+                  ),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(8),
                   ),
@@ -830,7 +855,10 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
                     ? const SizedBox(
                         width: 14,
                         height: 14,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
                       )
                     : const Icon(Icons.cloud_upload_outlined, size: 18),
                 label: Text(_isSyncingOffline ? 'Syncing...' : 'Sync Now'),
@@ -957,21 +985,22 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
                       color: bill.isOffline
                           ? Colors.amber.shade50
                           : (bill.isCancelled
-                              ? Colors.red.shade50
-                              : Theme.of(context).colorScheme.primary.withValues(alpha: 0.08)),
+                                ? Colors.red.shade50
+                                : Theme.of(context).colorScheme.primary
+                                      .withValues(alpha: 0.08)),
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Icon(
                       bill.isOffline
                           ? Icons.cloud_off
                           : (bill.isCancelled
-                              ? Icons.cancel_outlined
-                              : Icons.receipt_long),
+                                ? Icons.cancel_outlined
+                                : Icons.receipt_long),
                       color: bill.isOffline
                           ? Colors.amber.shade800
                           : (bill.isCancelled
-                              ? Colors.red.shade700
-                              : Theme.of(context).colorScheme.primary),
+                                ? Colors.red.shade700
+                                : Theme.of(context).colorScheme.primary),
                       size: 22,
                     ),
                   ),
@@ -995,7 +1024,10 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
                             if (bill.isOffline) ...[
                               const SizedBox(width: 6),
                               Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 1.5,
+                                ),
                                 decoration: BoxDecoration(
                                   color: Colors.amber.shade100,
                                   borderRadius: BorderRadius.circular(4),
@@ -1013,7 +1045,10 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
                             if (bill.isCancelled) ...[
                               const SizedBox(width: 6),
                               Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 1.5,
+                                ),
                                 decoration: BoxDecoration(
                                   color: Colors.red.shade100,
                                   borderRadius: BorderRadius.circular(4),
@@ -1043,7 +1078,10 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
                             ),
                             const SizedBox(width: 8),
                             Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 1,
+                              ),
                               decoration: BoxDecoration(
                                 color: const Color(0xFFF1F5F9),
                                 borderRadius: BorderRadius.circular(4),
@@ -1080,7 +1118,10 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFF059669),
                           foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 4,
+                          ),
                           minimumSize: const Size(0, 30),
                           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                           shape: RoundedRectangleBorder(
@@ -1095,13 +1136,18 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
                                 height: 12,
                                 child: CircularProgressIndicator(
                                   strokeWidth: 2,
-                                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                    Colors.white,
+                                  ),
                                 ),
                               )
                             : const Icon(Icons.print, size: 14),
                         label: Text(
                           isPrinting ? 'Printing...' : 'Reprint',
-                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ),
                     ],
@@ -1284,8 +1330,7 @@ class _BillDetailsSheetState extends State<_BillDetailsSheet> {
                           // Items
                           if (_activeBill.items.isEmpty)
                             Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(vertical: 8),
+                              padding: const EdgeInsets.symmetric(vertical: 8),
                               child: Text(
                                 'Line items not loaded.',
                                 style: TextStyle(
@@ -1297,8 +1342,9 @@ class _BillDetailsSheetState extends State<_BillDetailsSheet> {
                           else
                             ..._activeBill.items.map((item) {
                               return Padding(
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 3),
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 3,
+                                ),
                                 child: Row(
                                   mainAxisAlignment:
                                       MainAxisAlignment.spaceBetween,
@@ -1332,11 +1378,12 @@ class _BillDetailsSheetState extends State<_BillDetailsSheet> {
                           // Subtotal & Roundoff
                           if (_activeBill.roundOff.abs() > 0.001) ...[
                             Row(
-                              mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                const Text('SUBTOTAL',
-                                    style: TextStyle(fontSize: 13)),
+                                const Text(
+                                  'SUBTOTAL',
+                                  style: TextStyle(fontSize: 13),
+                                ),
                                 Text(
                                   'Rs ${_activeBill.subtotal.toStringAsFixed(2)}',
                                   style: const TextStyle(fontSize: 13),
@@ -1345,11 +1392,12 @@ class _BillDetailsSheetState extends State<_BillDetailsSheet> {
                             ),
                             const SizedBox(height: 3),
                             Row(
-                              mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                const Text('ROUND OFF',
-                                    style: TextStyle(fontSize: 13)),
+                                const Text(
+                                  'ROUND OFF',
+                                  style: TextStyle(fontSize: 13),
+                                ),
                                 Text(
                                   '${_activeBill.roundOff > 0 ? "+" : ""}${_activeBill.roundOff.toStringAsFixed(2)}',
                                   style: const TextStyle(fontSize: 13),
@@ -1361,8 +1409,7 @@ class _BillDetailsSheetState extends State<_BillDetailsSheet> {
 
                           // Total
                           Row(
-                            mainAxisAlignment:
-                                MainAxisAlignment.spaceBetween,
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
                               const Text(
                                 'TOTAL',
@@ -1384,11 +1431,12 @@ class _BillDetailsSheetState extends State<_BillDetailsSheet> {
 
                           // Method
                           Row(
-                            mainAxisAlignment:
-                                MainAxisAlignment.spaceBetween,
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              const Text('METHOD',
-                                  style: TextStyle(fontSize: 13)),
+                              const Text(
+                                'METHOD',
+                                style: TextStyle(fontSize: 13),
+                              ),
                               Text(
                                 _activeBill.method,
                                 style: const TextStyle(

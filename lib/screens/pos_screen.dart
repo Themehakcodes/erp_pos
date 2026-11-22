@@ -143,7 +143,10 @@ class _PosScreenState extends State<PosScreen> {
         if (!mounted || cleanQuery.isEmpty) return;
         try {
           setState(() => _isSearchingBackend = true);
-          final results = await ApiService().searchProducts(cleanQuery, limit: 30);
+          final results = await ApiService().searchProducts(
+            cleanQuery,
+            limit: 30,
+          );
           if (!mounted) return;
           final prefs = await SharedPreferences.getInstance();
           final storeId = prefs.getString('store_id') ?? '';
@@ -190,7 +193,8 @@ class _PosScreenState extends State<PosScreen> {
     final lower = barcode.toLowerCase();
     Product? found;
     for (final p in _products) {
-      if (p.barcode.toLowerCase() == lower || p.productCode.toLowerCase() == lower) {
+      if (p.barcode.toLowerCase() == lower ||
+          p.productCode.toLowerCase() == lower) {
         found = p;
         break;
       }
@@ -1046,7 +1050,8 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   void _checkout() async {
-    if (_isProcessing || _cart.isEmpty) return; // block if already processing or empty
+    if (_isProcessing || _cart.isEmpty)
+      return; // block if already processing or empty
 
     // Automatically ensure shift is open before completing any bill
     final isShiftOpen = await _ensureShiftIsOpen();
@@ -1352,7 +1357,9 @@ class _PosScreenState extends State<PosScreen> {
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
+                color: Theme.of(
+                  context,
+                ).colorScheme.primary.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Icon(
@@ -1687,146 +1694,146 @@ class _PosScreenState extends State<PosScreen> {
         behavior: HitTestBehavior.translucent,
         child: LayoutBuilder(
           builder: (context, constraints) {
-          final isMobile = constraints.maxWidth < 800;
+            final isMobile = constraints.maxWidth < 800;
 
-          if (isMobile) {
-            return Stack(
-              children: [
-                _buildProductSection(isMobile: true),
-                if (_cart.isNotEmpty)
-                  Positioned(
-                    bottom: 0,
-                    left: 0,
-                    right: 0,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        boxShadow: const [
-                          BoxShadow(
-                            color: Color(0x1A000000),
-                            blurRadius: 10,
-                            offset: Offset(0, -5),
-                          ),
-                        ],
-                      ),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 12,
-                      ),
-                      child: SafeArea(
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  '${_cart.length} items',
-                                  style: TextStyle(
-                                    color: Colors.grey.shade600,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                Text(
-                                  '₹${_totalAmount.toStringAsFixed(2)}',
-                                  style: const TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ],
+            if (isMobile) {
+              return Stack(
+                children: [
+                  _buildProductSection(isMobile: true),
+                  if (_cart.isNotEmpty)
+                    Positioned(
+                      bottom: 0,
+                      left: 0,
+                      right: 0,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Color(0x1A000000),
+                              blurRadius: 10,
+                              offset: Offset(0, -5),
                             ),
-                            ElevatedButton(
-                              onPressed: () {
-                                _isBottomSheetOpen = true;
-                                showModalBottomSheet(
-                                  context: context,
-                                  isScrollControlled: true,
-                                  backgroundColor: Colors.transparent,
-                                  builder: (context) =>
-                                      ValueListenableBuilder<int>(
-                                        valueListenable: _cartNotifier,
-                                        builder: (context, _, child) {
-                                          return Container(
-                                            height:
-                                                MediaQuery.of(
-                                                  context,
-                                                ).size.height *
-                                                0.85,
-                                            margin: EdgeInsets.only(
-                                              top: MediaQuery.of(
-                                                context,
-                                              ).padding.top,
-                                            ),
-                                            decoration: const BoxDecoration(
-                                              color: Colors.white,
-                                              borderRadius:
-                                                  BorderRadius.vertical(
-                                                    top: Radius.circular(24),
-                                                  ),
-                                            ),
-                                            child: _buildCartUI(context),
-                                          );
-                                        },
-                                      ),
-                                ).whenComplete(
-                                  () => _isBottomSheetOpen = false,
-                                );
-                              },
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Theme.of(
-                                  context,
-                                ).colorScheme.primary,
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 32,
-                                  vertical: 16,
-                                ),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                              ),
-                              child: const Row(
+                          ],
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 12,
+                        ),
+                        child: SafeArea(
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  Icon(
-                                    Icons.shopping_cart,
-                                    color: Colors.white,
-                                  ),
-                                  SizedBox(width: 8),
                                   Text(
-                                    'View Cart',
+                                    '${_cart.length} items',
                                     style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 16,
+                                      color: Colors.grey.shade600,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  Text(
+                                    '₹${_totalAmount.toStringAsFixed(2)}',
+                                    style: const TextStyle(
+                                      fontSize: 20,
                                       fontWeight: FontWeight.bold,
                                     ),
                                   ),
                                 ],
                               ),
-                            ),
-                          ],
+                              ElevatedButton(
+                                onPressed: () {
+                                  _isBottomSheetOpen = true;
+                                  showModalBottomSheet(
+                                    context: context,
+                                    isScrollControlled: true,
+                                    backgroundColor: Colors.transparent,
+                                    builder: (context) =>
+                                        ValueListenableBuilder<int>(
+                                          valueListenable: _cartNotifier,
+                                          builder: (context, _, child) {
+                                            return Container(
+                                              height:
+                                                  MediaQuery.of(
+                                                    context,
+                                                  ).size.height *
+                                                  0.85,
+                                              margin: EdgeInsets.only(
+                                                top: MediaQuery.of(
+                                                  context,
+                                                ).padding.top,
+                                              ),
+                                              decoration: const BoxDecoration(
+                                                color: Colors.white,
+                                                borderRadius:
+                                                    BorderRadius.vertical(
+                                                      top: Radius.circular(24),
+                                                    ),
+                                              ),
+                                              child: _buildCartUI(context),
+                                            );
+                                          },
+                                        ),
+                                  ).whenComplete(
+                                    () => _isBottomSheetOpen = false,
+                                  );
+                                },
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Theme.of(
+                                    context,
+                                  ).colorScheme.primary,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 32,
+                                    vertical: 16,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                ),
+                                child: const Row(
+                                  children: [
+                                    Icon(
+                                      Icons.shopping_cart,
+                                      color: Colors.white,
+                                    ),
+                                    SizedBox(width: 8),
+                                    Text(
+                                      'View Cart',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),
-                  ),
+                ],
+              );
+            }
+
+            return Row(
+              children: [
+                Expanded(
+                  flex: _isCartVisible ? 9 : 14,
+                  child: _buildProductSection(isMobile: false),
+                ),
+                if (_isCartVisible)
+                  Expanded(flex: 5, child: _buildCartUI(context)),
               ],
             );
-          }
-
-          return Row(
-            children: [
-              Expanded(
-                flex: _isCartVisible ? 9 : 14,
-                child: _buildProductSection(isMobile: false),
-              ),
-              if (_isCartVisible)
-                Expanded(flex: 5, child: _buildCartUI(context)),
-            ],
-          );
-        },
+          },
+        ),
       ),
-    ),
-  );
+    );
   }
 
   Widget _buildCartUI(BuildContext context) {
@@ -2105,7 +2112,9 @@ class _PosScreenState extends State<PosScreen> {
                     width: double.infinity,
                     height: 64,
                     child: ElevatedButton(
-                      onPressed: (_cart.isEmpty || _isProcessing) ? null : _checkout,
+                      onPressed: (_cart.isEmpty || _isProcessing)
+                          ? null
+                          : _checkout,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Theme.of(context).colorScheme.primary,
                         foregroundColor: Colors.white,
@@ -2499,7 +2508,9 @@ class _SplitPaymentDialogState extends State<SplitPaymentDialog> {
                   if ((cash + upi - widget.totalAmount).abs() > 0.01) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
-                        content: Text('Total split amounts must equal Total Due'),
+                        content: Text(
+                          'Total split amounts must equal Total Due',
+                        ),
                       ),
                     );
                     return;
@@ -2617,7 +2628,11 @@ class _PosCameraScannerSheetState extends State<_PosCameraScannerSheet> {
                   ),
                   child: const Row(
                     children: [
-                      Icon(Icons.qr_code_scanner, color: Colors.white, size: 18),
+                      Icon(
+                        Icons.qr_code_scanner,
+                        color: Colors.white,
+                        size: 18,
+                      ),
                       SizedBox(width: 8),
                       Text(
                         'Point at Barcode',

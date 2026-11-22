@@ -30,20 +30,33 @@ class _SplashLoaderState extends State<SplashLoader> {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('access_token');
     if (token == null) {
-       if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LoginScreen()));
-       return;
+      if (mounted)
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const LoginScreen()),
+        );
+      return;
     }
-    
+
     try {
       final deviceId = await ApiService().getDeviceIdentifier();
       try {
         final terminal = await ApiService().checkTerminal(deviceId);
         final terminalId = terminal['id'];
-        
+
         final savedStore = prefs.getString('store_id');
         if (savedStore == null || savedStore.isEmpty) {
-           if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => DeviceNotRegisteredScreen(deviceId: deviceId, existingTerminalId: terminalId)));
-           return;
+          if (mounted)
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (_) => DeviceNotRegisteredScreen(
+                  deviceId: deviceId,
+                  existingTerminalId: terminalId,
+                ),
+              ),
+            );
+          return;
         }
 
         final storeId = terminal['store_id'] ?? savedStore;
@@ -54,49 +67,87 @@ class _SplashLoaderState extends State<SplashLoader> {
           final fyId = await ApiService().getActiveFinancialYear();
           await prefs.setString('financial_year_id', fyId);
         } catch (e) {
-           // Handle missing financial year if needed
+          // Handle missing financial year if needed
         }
 
         final shift = await ApiService().getActiveShift(terminalId);
         if (shift != null) {
           await prefs.setString('shift_id', shift['id']);
-          if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => MainHome(openingBalance: (shift['opening_cash'] ?? 0.0).toDouble())));
+          if (mounted)
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (_) => MainHome(
+                  openingBalance: (shift['opening_cash'] ?? 0.0).toDouble(),
+                ),
+              ),
+            );
         } else {
           await prefs.remove('shift_id');
-          if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const MainHome(openingBalance: 0.0)));
+          if (mounted)
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (_) => const MainHome(openingBalance: 0.0),
+              ),
+            );
         }
       } catch (e) {
         // Auth/session errors → go to login
         final errStr = e.toString();
-        if (errStr.contains('Session expired') || errStr.contains('Unauthorized') || errStr.contains('revoked') || errStr.contains('401')) {
+        if (errStr.contains('Session expired') ||
+            errStr.contains('Unauthorized') ||
+            errStr.contains('revoked') ||
+            errStr.contains('401')) {
           await prefs.remove('access_token');
-          if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LoginScreen()));
+          if (mounted)
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (_) => const LoginScreen()),
+            );
           return;
         }
-        
+
         // If we have a saved shift, go offline mode
         final offlineShiftId = prefs.getString('shift_id');
         if (offlineShiftId != null) {
-           if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => MainHome(openingBalance: 0.0)));
-           return;
+          if (mounted)
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (_) => MainHome(openingBalance: 0.0)),
+            );
+          return;
         }
-        
+
         // Network/timeout errors → show retry screen
-        if (errStr.contains('TimeoutException') || errStr.contains('SocketException') || errStr.contains('Failed host lookup') || errStr.contains('Connection refused')) {
+        if (errStr.contains('TimeoutException') ||
+            errStr.contains('SocketException') ||
+            errStr.contains('Failed host lookup') ||
+            errStr.contains('Connection refused')) {
           rethrow; // Goes to outer catch → shows retry screen
         }
-        
+
         // Any other error (terminal not found, 404, not registered, etc.) → register device
-        if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => DeviceNotRegisteredScreen(deviceId: deviceId)));
+        if (mounted)
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (_) => DeviceNotRegisteredScreen(deviceId: deviceId),
+            ),
+          );
         return;
       }
-    } catch(e) {
+    } catch (e) {
       final offlineShiftId = prefs.getString('shift_id');
       if (offlineShiftId != null) {
-         if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => MainHome(openingBalance: 0.0)));
-         return;
+        if (mounted)
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => MainHome(openingBalance: 0.0)),
+          );
+        return;
       }
-      
+
       if (mounted) {
         setState(() {
           _hasError = true;
@@ -134,7 +185,10 @@ class _SplashLoaderState extends State<SplashLoader> {
                   icon: const Icon(Icons.refresh),
                   label: const Text('Retry'),
                   style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 12,
+                    ),
                   ),
                 ),
               ],
@@ -146,5 +200,3 @@ class _SplashLoaderState extends State<SplashLoader> {
     return const Scaffold(body: Center(child: CircularProgressIndicator()));
   }
 }
-
-
