@@ -4,7 +4,6 @@ import '../api_service.dart';
 import 'main_home.dart';
 import 'login_screen.dart';
 import 'device_not_registered_screen.dart';
-import 'opening_balance_screen.dart';
 
 class SplashLoader extends StatefulWidget {
   const SplashLoader({super.key});
@@ -63,7 +62,8 @@ class _SplashLoaderState extends State<SplashLoader> {
           await prefs.setString('shift_id', shift['id']);
           if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => MainHome(openingBalance: (shift['opening_cash'] ?? 0.0).toDouble())));
         } else {
-          if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const OpeningBalanceScreen()));
+          await prefs.remove('shift_id');
+          if (mounted) Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const MainHome(openingBalance: 0.0)));
         }
       } catch (e) {
         // Auth/session errors → go to login

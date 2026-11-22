@@ -44,6 +44,7 @@ class _PosScreenState extends State<PosScreen> {
   String _lastScannedBarcode = '';
   DateTime _lastScanTime = DateTime.fromMillisecondsSinceEpoch(0);
   int _offlineCount = 0;
+  String? _currentShiftId;
 
   @override
   void initState() {
@@ -71,6 +72,7 @@ class _PosScreenState extends State<PosScreen> {
   Future<void> _loadData() async {
     final prefs = await SharedPreferences.getInstance();
     final storeId = prefs.getString('store_id') ?? '';
+    _currentShiftId = prefs.getString('shift_id');
     _updateOfflineCount();
     setState(() {
       _userId = prefs.getString('user_name') ?? 'Cashier';
@@ -207,7 +209,7 @@ class _PosScreenState extends State<PosScreen> {
       _searchCtrl.clear();
       setState(() => _displayedProducts = _products);
       if (mounted) {
-        _searchFocus.requestFocus();
+        _searchFocus.unfocus();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Added "${found.name}" to cart'),
@@ -236,7 +238,7 @@ class _PosScreenState extends State<PosScreen> {
         _searchCtrl.clear();
         setState(() => _displayedProducts = _products);
         if (mounted) {
-          _searchFocus.requestFocus();
+          _searchFocus.unfocus();
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text('Added "${newProduct.name}" to cart'),
@@ -259,7 +261,7 @@ class _PosScreenState extends State<PosScreen> {
         ),
       );
       _searchCtrl.clear();
-      _searchFocus.requestFocus();
+      _searchFocus.unfocus();
     }
   }
 
@@ -430,6 +432,7 @@ class _PosScreenState extends State<PosScreen> {
         child: TextField(
           controller: _searchCtrl,
           focusNode: _searchFocus,
+          autofocus: false,
           onChanged: _onSearchChanged,
           onSubmitted: _handleBarcodeScan,
           textInputAction: TextInputAction.search,
@@ -458,6 +461,8 @@ class _PosScreenState extends State<PosScreen> {
                     onPressed: () {
                       _searchCtrl.clear();
                       _onSearchChanged('');
+                      _searchFocus.unfocus();
+                      FocusScope.of(context).unfocus();
                     },
                   ),
                 IconButton(
@@ -805,8 +810,249 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
-  void _checkout() {
+  Future<bool> _ensureShiftIsOpen() async {
+    final prefs = await SharedPreferences.getInstance();
+    var shiftId = prefs.getString('shift_id');
+    if (shiftId != null && shiftId.isNotEmpty) {
+      if (_currentShiftId != shiftId) {
+        setState(() => _currentShiftId = shiftId);
+      }
+      return true;
+    }
+
+    // Check if backend has an open shift for this terminal
+    final terminalId = prefs.getString('terminal_id');
+    if (terminalId != null && terminalId.isNotEmpty) {
+      try {
+        final activeShift = await ApiService().getActiveShift(terminalId);
+        if (activeShift != null && activeShift['id'] != null) {
+          shiftId = activeShift['id'].toString();
+          await prefs.setString('shift_id', shiftId);
+          if (mounted) {
+            setState(() => _currentShiftId = shiftId);
+          }
+          return true;
+        }
+      } catch (_) {}
+    }
+
+    // No active shift found -> Prompt cashier to open shift before billing
+    if (!mounted) return false;
+    return await _showOpenShiftDialog(isMandatoryForCheckout: true);
+  }
+
+  Future<bool> _showOpenShiftDialog({
+    bool isMandatoryForCheckout = false,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final storeId = prefs.getString('store_id');
+    final terminalId = prefs.getString('terminal_id');
+
+    if (storeId == null || terminalId == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Terminal not configured. Please check settings.'),
+          ),
+        );
+      }
+      return false;
+    }
+
+    final txt = TextEditingController(text: '0.00');
+    bool isSubmitting = false;
+
+    if (!mounted) return false;
+
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: !isMandatoryForCheckout,
+      builder: (dialogCtx) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              title: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade50,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(
+                      Icons.lock_open,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  const Text(
+                    'Open Shift',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+                  ),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (isMandatoryForCheckout)
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 16),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.orange.shade200),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.info_outline,
+                            color: Colors.orange.shade900,
+                            size: 20,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Please open a shift before completing this bill.',
+                              style: TextStyle(
+                                color: Colors.orange.shade900,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  const Text(
+                    'Opening Cash In Drawer (Rs)',
+                    style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: txt,
+                    autofocus: true,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: InputDecoration(
+                      prefixIcon: const Icon(Icons.currency_rupee),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 14,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () => Navigator.pop(dialogCtx, false),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Theme.of(context).colorScheme.primary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  onPressed: isSubmitting
+                      ? null
+                      : () async {
+                          setDialogState(() => isSubmitting = true);
+                          final balance = double.tryParse(txt.text) ?? 0.0;
+                          try {
+                            final existingShift = await ApiService()
+                                .getActiveShift(terminalId);
+                            if (existingShift != null) {
+                              final sId = existingShift['id'].toString();
+                              await prefs.setString('shift_id', sId);
+                              if (mounted) {
+                                setState(() => _currentShiftId = sId);
+                              }
+                              if (dialogCtx.mounted) {
+                                Navigator.pop(dialogCtx, true);
+                              }
+                              return;
+                            }
+
+                            final shift = await ApiService().openShift(
+                              storeId,
+                              terminalId,
+                              balance,
+                            );
+                            final sId = shift['id'].toString();
+                            await prefs.setString('shift_id', sId);
+                            if (mounted) {
+                              setState(() => _currentShiftId = sId);
+                            }
+
+                            try {
+                              await PrinterHelper.printShiftReceipt(
+                                widget.selectedPrinter,
+                                true,
+                                balance,
+                                storeId,
+                                terminalId,
+                              );
+                            } catch (e) {
+                              debugPrint('Error printing open receipt: $e');
+                            }
+
+                            if (dialogCtx.mounted) {
+                              Navigator.pop(dialogCtx, true);
+                            }
+                          } catch (e) {
+                            if (dialogCtx.mounted) {
+                              setDialogState(() => isSubmitting = false);
+                              ScaffoldMessenger.of(dialogCtx).showSnackBar(
+                                SnackBar(
+                                  content: Text('Failed to open shift: $e'),
+                                ),
+                              );
+                            }
+                          }
+                        },
+                  child: isSubmitting
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text('Confirm Open Shift'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    return result ?? false;
+  }
+
+  void _checkout() async {
     if (_isProcessing || _cart.isEmpty) return; // block if already processing or empty
+
+    // Automatically ensure shift is open before completing any bill
+    final isShiftOpen = await _ensureShiftIsOpen();
+    if (!isShiftOpen) return;
+
+    if (!mounted) return;
     showDialog(
       context: context,
       barrierDismissible: !_isProcessing,
@@ -1282,16 +1528,31 @@ class _PosScreenState extends State<PosScreen> {
           Container(
             margin: const EdgeInsets.symmetric(vertical: 8),
             decoration: BoxDecoration(
-              color: Colors.orange.shade50,
+              color: (_currentShiftId == null || _currentShiftId!.isEmpty)
+                  ? Colors.blue.shade50
+                  : Colors.orange.shade50,
               borderRadius: BorderRadius.circular(12),
             ),
             child: IconButton(
-              icon: Icon(Icons.lock_clock, color: Colors.orange.shade800),
-              tooltip: 'Close Shift',
+              icon: Icon(
+                (_currentShiftId == null || _currentShiftId!.isEmpty)
+                    ? Icons.lock_open
+                    : Icons.lock_clock,
+                color: (_currentShiftId == null || _currentShiftId!.isEmpty)
+                    ? Colors.blue.shade800
+                    : Colors.orange.shade800,
+              ),
+              tooltip: (_currentShiftId == null || _currentShiftId!.isEmpty)
+                  ? 'Open Shift'
+                  : 'Close Shift',
               onPressed: () async {
+                if (_currentShiftId == null || _currentShiftId!.isEmpty) {
+                  await _showOpenShiftDialog(isMandatoryForCheckout: false);
+                  return;
+                }
                 final scaffoldMessenger = ScaffoldMessenger.of(context);
                 final prefs = await SharedPreferences.getInstance();
-                final shiftId = prefs.getString('shift_id');
+                final shiftId = _currentShiftId ?? prefs.getString('shift_id');
                 if (shiftId == null) return;
                 if (!context.mounted) return;
 
@@ -1370,7 +1631,19 @@ class _PosScreenState extends State<PosScreen> {
                     } catch (e) {
                       debugPrint('Error printing close receipt: $e');
                     }
-                    _logout();
+                    await prefs.remove('shift_id');
+                    if (mounted) {
+                      setState(() => _currentShiftId = null);
+                      scaffoldMessenger.showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Shift closed successfully. You can open a new shift anytime.',
+                          ),
+                          backgroundColor: Colors.orange,
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    }
                   } catch (e) {
                     if (!mounted) return;
                     scaffoldMessenger.showSnackBar(
@@ -1409,8 +1682,11 @@ class _PosScreenState extends State<PosScreen> {
           const SizedBox(width: 16),
         ],
       ),
-      body: LayoutBuilder(
-        builder: (context, constraints) {
+      body: GestureDetector(
+        onTap: () => FocusScope.of(context).unfocus(),
+        behavior: HitTestBehavior.translucent,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
           final isMobile = constraints.maxWidth < 800;
 
           if (isMobile) {
@@ -1549,7 +1825,8 @@ class _PosScreenState extends State<PosScreen> {
           );
         },
       ),
-    );
+    ),
+  );
   }
 
   Widget _buildCartUI(BuildContext context) {

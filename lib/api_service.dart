@@ -507,8 +507,10 @@ class ApiService {
   }) async {
     final prefs = await SharedPreferences.getInstance();
     final effectiveStoreId = storeId ?? prefs.getString('store_id') ?? '';
+    final offset = (page > 0 ? (page - 1) : 0) * limit;
     final queryParams = <String, String>{
       'page': page.toString(),
+      'offset': offset.toString(),
       'limit': limit.toString(),
       if (effectiveStoreId.isNotEmpty) 'store_id': effectiveStoreId,
       if (shiftId != null && shiftId.isNotEmpty) 'shift_id': shiftId,

@@ -5,6 +5,39 @@ import '../api_service.dart';
 import '../models/models.dart';
 import '../printer_helper.dart';
 
+String formatBillDate(String rawDate) {
+  if (rawDate.isEmpty) return '';
+  try {
+    final dt = DateTime.tryParse(rawDate);
+    if (dt != null) {
+      final local = dt.toLocal();
+      final y = local.year.toString();
+      final m = local.month.toString().padLeft(2, '0');
+      final d = local.day.toString().padLeft(2, '0');
+      var hour = local.hour;
+      final min = local.minute.toString().padLeft(2, '0');
+      final ampm = hour >= 12 ? 'PM' : 'AM';
+      hour = hour % 12;
+      if (hour == 0) hour = 12;
+      return '$d-$m-$y $hour:$min $ampm';
+    }
+  } catch (_) {}
+  return rawDate.length > 16 ? rawDate.substring(0, 16) : rawDate;
+}
+
+int compareBillsDescending(BillReceiptData a, BillReceiptData b) {
+  final dtA = DateTime.tryParse(a.dateStr);
+  final dtB = DateTime.tryParse(b.dateStr);
+  if (dtA != null && dtB != null) {
+    final cmp = dtB.compareTo(dtA);
+    if (cmp != 0) return cmp;
+  } else if (a.dateStr.isNotEmpty && b.dateStr.isNotEmpty) {
+    final cmp = b.dateStr.compareTo(a.dateStr);
+    if (cmp != 0) return cmp;
+  }
+  return b.invoiceNo.compareTo(a.invoiceNo);
+}
+
 class BillHistoryScreen extends StatefulWidget {
   final SelectedPrinter? selectedPrinter;
 
@@ -20,13 +53,26 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
   final TextEditingController _searchCtrl = TextEditingController();
   final FocusNode _searchFocus = FocusNode();
 
+  static const int _pageSize = 30;
+
   bool _isLoading = false;
   String _currentShiftId = '';
   String _currentStoreId = '';
 
   List<BillReceiptData> _shiftBills = [];
+  int _shiftPage = 1;
+  bool _shiftHasMore = true;
+  bool _isLoadingMoreShift = false;
+  final ScrollController _shiftScrollCtrl = ScrollController();
+
   List<BillReceiptData> _todayBills = [];
+  int _todayPage = 1;
+  bool _todayHasMore = true;
+  bool _isLoadingMoreToday = false;
+  final ScrollController _todayScrollCtrl = ScrollController();
+
   List<BillReceiptData> _offlineBills = [];
+  final ScrollController _offlineScrollCtrl = ScrollController();
 
   String _searchQuery = '';
   Timer? _debounceTimer;
@@ -42,16 +88,41 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
     _tabController.addListener(() {
       if (mounted) setState(() {});
     });
+    _shiftScrollCtrl.addListener(_onShiftScroll);
+    _todayScrollCtrl.addListener(_onTodayScroll);
     _loadInitialData();
   }
 
   @override
   void dispose() {
+    _shiftScrollCtrl.removeListener(_onShiftScroll);
+    _todayScrollCtrl.removeListener(_onTodayScroll);
+    _shiftScrollCtrl.dispose();
+    _todayScrollCtrl.dispose();
+    _offlineScrollCtrl.dispose();
     _tabController.dispose();
     _searchCtrl.dispose();
     _searchFocus.dispose();
     _debounceTimer?.cancel();
     super.dispose();
+  }
+
+  void _onShiftScroll() {
+    if (_shiftScrollCtrl.position.pixels >=
+        _shiftScrollCtrl.position.maxScrollExtent - 200) {
+      if (!_isLoading && !_isLoadingMoreShift && _shiftHasMore && _searchQuery.isEmpty) {
+        _loadMoreShiftBills();
+      }
+    }
+  }
+
+  void _onTodayScroll() {
+    if (_todayScrollCtrl.position.pixels >=
+        _todayScrollCtrl.position.maxScrollExtent - 200) {
+      if (!_isLoading && !_isLoadingMoreToday && _todayHasMore && _searchQuery.isEmpty) {
+        _loadMoreTodayBills();
+      }
+    }
   }
 
   Future<void> _loadInitialData() async {
@@ -82,28 +153,41 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
   }
 
   Future<void> _fetchAllTabsData() async {
-    setState(() => _isLoading = true);
+    setState(() {
+      _isLoading = true;
+      _shiftPage = 1;
+      _shiftHasMore = true;
+      _todayPage = 1;
+      _todayHasMore = true;
+    });
     try {
       // 1. Load local terminal cache & offline pending sales first (instant!)
       final localCache = await ApiService.getLocalShiftBills();
       final offlineSales = await ApiService.getOfflinePendingBills();
+      offlineSales.sort(compareBillsDescending);
 
       // 2. Load today's date string in YYYY-MM-DD
       final now = DateTime.now();
       final todayStr =
           "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
 
-      // 3. Fetch shift bills and today's bills from ERP server
+      // 3. Fetch first page of shift bills and today's bills from ERP server
       List<Map<String, dynamic>> serverShiftSales = [];
       List<Map<String, dynamic>> serverTodaySales = [];
 
       try {
         if (_currentShiftId.isNotEmpty) {
           serverShiftSales = await ApiService().getSales(
-            limit: 100,
+            page: 1,
+            limit: _pageSize,
             shiftId: _currentShiftId,
             storeId: _currentStoreId,
           );
+          if (serverShiftSales.length < _pageSize) {
+            _shiftHasMore = false;
+          }
+        } else {
+          _shiftHasMore = false;
         }
       } catch (e) {
         debugPrint('Could not fetch shift sales from server: $e');
@@ -111,11 +195,15 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
 
       try {
         serverTodaySales = await ApiService().getSales(
-          limit: 100,
+          page: 1,
+          limit: _pageSize,
           fromDate: todayStr,
           toDate: todayStr,
           storeId: _currentStoreId,
         );
+        if (serverTodaySales.length < _pageSize) {
+          _todayHasMore = false;
+        }
       } catch (e) {
         debugPrint('Could not fetch today sales from server: $e');
       }
@@ -149,9 +237,9 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
         }
       }
 
-      // Convert map to sorted list (newest first)
+      // Convert map to sorted list (newest first / descending)
       final List<BillReceiptData> mergedShift = shiftMap.values.toList();
-      mergedShift.sort((a, b) => b.dateStr.compareTo(a.dateStr));
+      mergedShift.sort(compareBillsDescending);
 
       // Build today bills list
       final Map<String, BillReceiptData> todayMap = {};
@@ -165,8 +253,13 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
           todayMap[invNo] = _convertSaleSummaryToBill(s);
         }
       }
+      for (final off in offlineSales) {
+        if (!todayMap.containsKey(off.invoiceNo)) {
+          todayMap[off.invoiceNo] = off;
+        }
+      }
       final List<BillReceiptData> mergedToday = todayMap.values.toList();
-      mergedToday.sort((a, b) => b.dateStr.compareTo(a.dateStr));
+      mergedToday.sort(compareBillsDescending);
 
       if (mounted) {
         setState(() {
@@ -186,12 +279,97 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
     }
   }
 
+  Future<void> _loadMoreShiftBills() async {
+    if (_isLoadingMoreShift || !_shiftHasMore || _currentShiftId.isEmpty) return;
+    setState(() => _isLoadingMoreShift = true);
+    try {
+      final nextPage = _shiftPage + 1;
+      final newSales = await ApiService().getSales(
+        page: nextPage,
+        limit: _pageSize,
+        shiftId: _currentShiftId,
+        storeId: _currentStoreId,
+      );
+      if (newSales.isEmpty || newSales.length < _pageSize) {
+        _shiftHasMore = false;
+      }
+      if (newSales.isNotEmpty) {
+        final Map<String, BillReceiptData> map = {
+          for (var b in _shiftBills) b.invoiceNo: b,
+        };
+        for (var s in newSales) {
+          final inv = (s['invoice_number'] ?? s['invoice_no'] ?? '').toString();
+          if (inv.isNotEmpty && !map.containsKey(inv)) {
+            map[inv] = _convertSaleSummaryToBill(s);
+          }
+        }
+        final list = map.values.toList();
+        list.sort(compareBillsDescending);
+        if (mounted) {
+          setState(() {
+            _shiftBills = list;
+            _shiftPage = nextPage;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Error loading more shift bills: $e');
+    } finally {
+      if (mounted) setState(() => _isLoadingMoreShift = false);
+    }
+  }
+
+  Future<void> _loadMoreTodayBills() async {
+    if (_isLoadingMoreToday || !_todayHasMore) return;
+    setState(() => _isLoadingMoreToday = true);
+    try {
+      final now = DateTime.now();
+      final todayStr =
+          "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
+      final nextPage = _todayPage + 1;
+      final newSales = await ApiService().getSales(
+        page: nextPage,
+        limit: _pageSize,
+        fromDate: todayStr,
+        toDate: todayStr,
+        storeId: _currentStoreId,
+      );
+      if (newSales.isEmpty || newSales.length < _pageSize) {
+        _todayHasMore = false;
+      }
+      if (newSales.isNotEmpty) {
+        final Map<String, BillReceiptData> map = {
+          for (var b in _todayBills) b.invoiceNo: b,
+        };
+        for (var s in newSales) {
+          final inv = (s['invoice_number'] ?? s['invoice_no'] ?? '').toString();
+          if (inv.isNotEmpty && !map.containsKey(inv)) {
+            map[inv] = _convertSaleSummaryToBill(s);
+          }
+        }
+        final list = map.values.toList();
+        list.sort(compareBillsDescending);
+        if (mounted) {
+          setState(() {
+            _todayBills = list;
+            _todayPage = nextPage;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Error loading more today bills: $e');
+    } finally {
+      if (mounted) setState(() => _isLoadingMoreToday = false);
+    }
+  }
+
   BillReceiptData _convertSaleSummaryToBill(Map<String, dynamic> s) {
     final netAmount = (s['net_amount'] is num)
         ? (s['net_amount'] as num).toDouble()
         : (double.tryParse(s['net_amount']?.toString() ?? '0') ?? 0.0);
     final invNo = (s['invoice_number'] ?? s['invoice_no'] ?? '').toString();
-    final dStr = (s['invoice_date'] ?? s['created_at'] ?? '').toString();
+    // Prefer created_at because it holds the exact timestamp with hours:minutes:seconds
+    final dStr = (s['created_at'] ?? s['invoice_date'] ?? '').toString();
     final method = (s['payment_methods_used'] ?? 'Cash').toString();
     final id = (s['id'] ?? '').toString();
     final isCancelled = s['is_cancelled'] == true;
@@ -383,7 +561,7 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Text(
-                      '${_shiftBills.length}',
+                      '${_shiftBills.length}${_shiftHasMore ? "+" : ""}',
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.bold,
@@ -408,7 +586,7 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Text(
-                      '${_todayBills.length}',
+                      '${_todayBills.length}${_todayHasMore ? "+" : ""}',
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.bold,
@@ -499,8 +677,22 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
                 : TabBarView(
                     controller: _tabController,
                     children: [
-                      _buildBillsList(_getFilteredList(_shiftBills), 'No bills found in this shift.'),
-                      _buildBillsList(_getFilteredList(_todayBills), 'No bills found today.'),
+                      _buildBillsList(
+                        bills: _getFilteredList(_shiftBills),
+                        emptyMessage: 'No bills found in this shift.',
+                        scrollController: _shiftScrollCtrl,
+                        isLoadingMore: _isLoadingMoreShift,
+                        hasMore: _shiftHasMore,
+                        onRefresh: _fetchAllTabsData,
+                      ),
+                      _buildBillsList(
+                        bills: _getFilteredList(_todayBills),
+                        emptyMessage: 'No bills found today.',
+                        scrollController: _todayScrollCtrl,
+                        isLoadingMore: _isLoadingMoreToday,
+                        hasMore: _todayHasMore,
+                        onRefresh: _fetchAllTabsData,
+                      ),
                       _buildOfflineTab(),
                     ],
                   ),
@@ -554,20 +746,32 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
   Widget _buildOfflineTab() {
     final filtered = _getFilteredList(_offlineBills);
     if (_offlineBills.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+      return RefreshIndicator(
+        onRefresh: _fetchAllTabsData,
+        child: ListView(
+          controller: _offlineScrollCtrl,
+          physics: const AlwaysScrollableScrollPhysics(),
           children: [
-            Icon(Icons.cloud_done_outlined, size: 64, color: Colors.green.shade400),
-            const SizedBox(height: 12),
-            Text(
-              'All bills are fully synced to cloud!',
-              style: TextStyle(fontSize: 16, color: Colors.grey.shade700, fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'No pending offline bills on this device.',
-              style: TextStyle(fontSize: 13, color: Colors.grey.shade500),
+            SizedBox(
+              height: MediaQuery.of(context).size.height * 0.5,
+              child: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.cloud_done_outlined, size: 64, color: Colors.green.shade400),
+                    const SizedBox(height: 12),
+                    Text(
+                      'All bills are fully synced to cloud!',
+                      style: TextStyle(fontSize: 16, color: Colors.grey.shade700, fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'No pending offline bills on this device.',
+                      style: TextStyle(fontSize: 13, color: Colors.grey.shade500),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ],
         ),
@@ -634,32 +838,100 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
             ],
           ),
         ),
-        Expanded(child: _buildBillsList(filtered, 'No matching offline bills found.')),
+        Expanded(
+          child: _buildBillsList(
+            bills: filtered,
+            emptyMessage: 'No matching offline bills found.',
+            scrollController: _offlineScrollCtrl,
+            isLoadingMore: false,
+            hasMore: false,
+            onRefresh: _fetchAllTabsData,
+          ),
+        ),
       ],
     );
   }
 
-  Widget _buildBillsList(List<BillReceiptData> bills, String emptyMessage) {
-    if (bills.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+  Widget _buildBillsList({
+    required List<BillReceiptData> bills,
+    required String emptyMessage,
+    required ScrollController scrollController,
+    required bool isLoadingMore,
+    required bool hasMore,
+    required Future<void> Function() onRefresh,
+  }) {
+    if (bills.isEmpty && !isLoadingMore) {
+      return RefreshIndicator(
+        onRefresh: onRefresh,
+        child: ListView(
+          controller: scrollController,
+          physics: const AlwaysScrollableScrollPhysics(),
           children: [
-            Icon(Icons.receipt_long_outlined, size: 64, color: Colors.grey.shade400),
-            const SizedBox(height: 12),
-            Text(
-              emptyMessage,
-              style: TextStyle(fontSize: 14, color: Colors.grey.shade600, fontWeight: FontWeight.w500),
+            SizedBox(
+              height: MediaQuery.of(context).size.height * 0.45,
+              child: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.receipt_long_outlined, size: 64, color: Colors.grey.shade400),
+                    const SizedBox(height: 12),
+                    Text(
+                      emptyMessage,
+                      style: TextStyle(fontSize: 14, color: Colors.grey.shade600, fontWeight: FontWeight.w500),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ],
         ),
       );
     }
 
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      itemCount: bills.length,
-      itemBuilder: (context, index) {
+    final showFooter = isLoadingMore || (!hasMore && bills.length >= _pageSize);
+
+    return RefreshIndicator(
+      onRefresh: onRefresh,
+      child: ListView.builder(
+        controller: scrollController,
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        itemCount: bills.length + (showFooter ? 1 : 0),
+        itemBuilder: (context, index) {
+          if (index == bills.length) {
+            if (isLoadingMore) {
+              return Container(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                alignment: Alignment.center,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      'Loading more bills...',
+                      style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+                    ),
+                  ],
+                ),
+              );
+            }
+            return Container(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              alignment: Alignment.center,
+              child: Text(
+                '— All ${bills.length} bills loaded —',
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+              ),
+            );
+          }
         final bill = bills[index];
         final isPrinting = (_printingInvoiceNo == bill.invoiceNo);
 
@@ -762,14 +1034,11 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
                         Row(
                           children: [
                             Text(
-                              bill.dateStr.isNotEmpty
-                                  ? (bill.dateStr.length > 16
-                                      ? bill.dateStr.substring(0, 16)
-                                      : bill.dateStr)
-                                  : '',
+                              formatBillDate(bill.dateStr),
                               style: TextStyle(
                                 fontSize: 12,
-                                color: Colors.grey.shade600,
+                                fontWeight: FontWeight.w500,
+                                color: Colors.grey.shade700,
                               ),
                             ),
                             const SizedBox(width: 8),
@@ -843,8 +1112,9 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
           ),
         );
       },
-    );
-  }
+    ),
+  );
+}
 }
 
 class _BillDetailsSheet extends StatefulWidget {
@@ -932,7 +1202,7 @@ class _BillDetailsSheetState extends State<_BillDetailsSheet> {
                       ),
                     ),
                     Text(
-                      _activeBill.dateStr,
+                      formatBillDate(_activeBill.dateStr),
                       style: TextStyle(
                         fontSize: 12,
                         color: Colors.grey.shade600,
@@ -998,7 +1268,7 @@ class _BillDetailsSheetState extends State<_BillDetailsSheet> {
                           ),
                           Center(
                             child: Text(
-                              'Date: ${_activeBill.dateStr}',
+                              'Date: ${formatBillDate(_activeBill.dateStr)}',
                               style: TextStyle(
                                 fontSize: 12,
                                 color: Colors.grey.shade700,

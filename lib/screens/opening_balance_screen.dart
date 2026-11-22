@@ -252,6 +252,19 @@ class _OpeningBalanceScreenState extends State<OpeningBalanceScreen> {
                         ),
                 ),
               ),
+              const SizedBox(height: 12),
+              TextButton(
+                onPressed: () {
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(builder: (_) => const MainHome(openingBalance: 0.0)),
+                  );
+                },
+                child: const Text(
+                  'Skip for Now (Enter POS without shift)',
+                  style: TextStyle(color: Colors.grey, fontSize: 14),
+                ),
+              ),
             ],
           ),
         ),
