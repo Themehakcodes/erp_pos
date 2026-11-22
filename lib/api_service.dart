@@ -324,6 +324,9 @@ class ApiService {
   Future<void> _saveSaleOffline(Map<String, dynamic> saleData) async {
     final prefs = await SharedPreferences.getInstance();
     final offlineSales = prefs.getStringList('offline_sales') ?? [];
+    if (saleData['client_sale_id'] == null || saleData['client_sale_id'].toString().isEmpty) {
+      saleData['client_sale_id'] = const Uuid().v4();
+    }
     offlineSales.add(jsonEncode(saleData));
     await prefs.setStringList('offline_sales', offlineSales);
   }
@@ -339,28 +342,67 @@ class ApiService {
 
     _isSyncing = true;
     try {
-      final List<String> failedSales = [];
+      final Set<String> syncedClientIds = {};
+      final Set<String> syncedRawStrings = {};
       // Cache headers once instead of fetching from disk per sale
       final headers = await getAuthHeaders();
       
       for (var saleStr in offlineSales) {
+        String? clientId;
+        try {
+          final decoded = jsonDecode(saleStr);
+          if (decoded is Map && decoded['client_sale_id'] != null) {
+            clientId = decoded['client_sale_id'].toString();
+          }
+        } catch (_) {}
+
         try {
           final res = await http.post(
             Uri.parse('$baseUrl/sales/'),
             headers: headers,
             body: saleStr,
-          ).timeout(const Duration(seconds: 10)); // shorter timeout for background tasks
+          ).timeout(const Duration(seconds: 12));
 
-          if (res.statusCode != 200 && res.statusCode != 201) {
-            failedSales.add(saleStr);
+          if (res.statusCode == 200 || res.statusCode == 201) {
+            if (clientId != null && clientId.isNotEmpty) {
+              syncedClientIds.add(clientId);
+            }
+            syncedRawStrings.add(saleStr);
+          } else if (res.statusCode >= 400 && res.statusCode < 500 && res.statusCode != 408 && res.statusCode != 429) {
+            // Client validation rejection (e.g. invalid UUID / bad payload)
+            // Archive to failed_offline_sales so it does not block the queue forever
+            debugPrint('Offline sale rejected by server with status ${res.statusCode}: ${res.body}');
+            final failedList = prefs.getStringList('failed_offline_sales') ?? [];
+            failedList.add(saleStr);
+            await prefs.setStringList('failed_offline_sales', failedList);
+
+            if (clientId != null && clientId.isNotEmpty) {
+              syncedClientIds.add(clientId);
+            }
+            syncedRawStrings.add(saleStr);
           }
         } catch (e) {
-          failedSales.add(saleStr);
+          debugPrint('Offline sale sync network error: $e');
         }
         // Small delay between requests to prevent flooding the event loop
         await Future.delayed(const Duration(milliseconds: 100));
       }
-      await prefs.setStringList('offline_sales', failedSales);
+
+      // Re-read latest offline_sales from prefs so we NEVER overwrite new sales added during sync!
+      final latestOfflineSales = prefs.getStringList('offline_sales') ?? [];
+      final remainingSales = latestOfflineSales.where((saleStr) {
+        if (syncedRawStrings.contains(saleStr)) return false;
+        try {
+          final decoded = jsonDecode(saleStr);
+          if (decoded is Map && decoded['client_sale_id'] != null) {
+            final id = decoded['client_sale_id'].toString();
+            if (syncedClientIds.contains(id)) return false;
+          }
+        } catch (_) {}
+        return true;
+      }).toList();
+
+      await prefs.setStringList('offline_sales', remainingSales);
     } finally {
       _isSyncing = false;
     }
@@ -625,9 +667,11 @@ class ApiService {
               method = (payments[0]['method'] ?? payments[0]['payment_method'] ?? 'Offline').toString();
             }
 
+            final invNumber = (map['offline_invoice_no'] ?? map['invoice_no'] ?? map['invoice_number'] ?? 'EST${(i + 1).toString().padLeft(4, "0")}').toString();
+
             result.add(BillReceiptData(
-              id: 'offline_$i',
-              invoiceNo: (map['invoice_no'] ?? map['invoice_number'] ?? 'EST${(i + 1).toString().padLeft(4, "0")}').toString(),
+              id: (map['client_sale_id'] ?? 'offline_$i').toString(),
+              invoiceNo: invNumber,
               dateStr: (map['invoice_date'] ?? DateTime.now().toString()).toString(),
               items: items,
               subtotal: subtotal,

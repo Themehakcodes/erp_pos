@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
-import 'login_screen.dart';
-
+import 'package:flutter/services.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 import 'dart:async';
 import '../api_service.dart';
 import '../models/models.dart';
 import '../printer_helper.dart';
 import 'bill_history_screen.dart';
+import 'login_screen.dart';
 
 class PosScreen extends StatefulWidget {
   final Function(String method, double amount) onSaleCompleted;
@@ -26,6 +28,7 @@ class _PosScreenState extends State<PosScreen> {
   final List<CartItem> _cart = [];
   final ValueNotifier<int> _cartNotifier = ValueNotifier<int>(0);
   List<Product> _products = [];
+  List<Product> _displayedProducts = [];
   bool _isLoading = true;
   bool _isCartVisible = true;
   String _userId = "Cashier";
@@ -33,10 +36,27 @@ class _PosScreenState extends State<PosScreen> {
   bool _isProcessing = false; // guard against double-tap checkout
   bool _isBottomSheetOpen = false;
 
+  // Real-time Search & Barcode Scanner Controllers
+  final TextEditingController _searchCtrl = TextEditingController();
+  final FocusNode _searchFocus = FocusNode();
+  Timer? _searchDebounceTimer;
+  bool _isSearchingBackend = false;
+  String _lastScannedBarcode = '';
+  DateTime _lastScanTime = DateTime.fromMillisecondsSinceEpoch(0);
+
   @override
   void initState() {
     super.initState();
     _loadData();
+  }
+
+  @override
+  void dispose() {
+    _searchDebounceTimer?.cancel();
+    _searchCtrl.dispose();
+    _searchFocus.dispose();
+    _cartNotifier.dispose();
+    super.dispose();
   }
 
   Future<void> _loadData() async {
@@ -47,28 +67,30 @@ class _PosScreenState extends State<PosScreen> {
       _estCounter = prefs.getInt('est_counter') ?? 1;
     });
     try {
-      final dynamic data = await ApiService().getProducts(limit: 100);
-      setState(() {
-        List itemsList = [];
-        if (data is List) {
-          itemsList = data;
-        } else if (data is Map) {
-          if (data['items'] != null) {
-            itemsList = data['items'];
-          } else if (data['products'] != null) {
-            itemsList = data['products'];
-          } else if (data['data'] != null) {
-            itemsList = data['data'];
-          }
+      final dynamic data = await ApiService().getProducts(limit: 200);
+      List itemsList = [];
+      if (data is List) {
+        itemsList = data;
+      } else if (data is Map) {
+        if (data['items'] != null) {
+          itemsList = data['items'];
+        } else if (data['products'] != null) {
+          itemsList = data['products'];
+        } else if (data['data'] != null) {
+          itemsList = data['data'];
         }
-        _products = itemsList
-            .map(
-              (e) => Product.fromJson(
-                e as Map<String, dynamic>,
-                targetStoreId: storeId,
-              ),
-            )
-            .toList();
+      }
+      final parsed = itemsList
+          .map(
+            (e) => Product.fromJson(
+              e as Map<String, dynamic>,
+              targetStoreId: storeId,
+            ),
+          )
+          .toList();
+      setState(() {
+        _products = parsed;
+        _displayedProducts = parsed;
         _isLoading = false;
       });
     } catch (e) {
@@ -79,6 +101,211 @@ class _PosScreenState extends State<PosScreen> {
         ).showSnackBar(SnackBar(content: Text(e.toString())));
       }
     }
+  }
+
+  void _onSearchChanged(String query) {
+    _searchDebounceTimer?.cancel();
+    final cleanQuery = query.trim().toLowerCase();
+
+    if (cleanQuery.isEmpty) {
+      setState(() {
+        _displayedProducts = _products;
+      });
+      return;
+    }
+
+    // 1. Instant local filter
+    final localMatches = _products.where((p) {
+      return p.name.toLowerCase().contains(cleanQuery) ||
+          p.barcode.toLowerCase().contains(cleanQuery) ||
+          p.productCode.toLowerCase().contains(cleanQuery);
+    }).toList();
+
+    setState(() {
+      _displayedProducts = localMatches;
+    });
+
+    // 2. Debounced query to backend if >= 2 characters to discover full catalog
+    if (cleanQuery.length >= 2) {
+      _searchDebounceTimer = Timer(const Duration(milliseconds: 350), () async {
+        if (!mounted || cleanQuery.isEmpty) return;
+        try {
+          setState(() => _isSearchingBackend = true);
+          final results = await ApiService().searchProducts(cleanQuery, limit: 30);
+          if (!mounted) return;
+          final prefs = await SharedPreferences.getInstance();
+          final storeId = prefs.getString('store_id') ?? '';
+          final remoteProducts = results
+              .map((e) => Product.fromJson(e, targetStoreId: storeId))
+              .toList();
+
+          final existingIds = localMatches.map((p) => p.id).toSet();
+          final combined = List<Product>.from(localMatches);
+          for (final rp in remoteProducts) {
+            if (!existingIds.contains(rp.id)) {
+              combined.add(rp);
+              existingIds.add(rp.id);
+            }
+          }
+
+          if (mounted && _searchCtrl.text.trim().toLowerCase() == cleanQuery) {
+            setState(() {
+              _displayedProducts = combined;
+              _isSearchingBackend = false;
+            });
+          }
+        } catch (_) {
+          if (mounted) setState(() => _isSearchingBackend = false);
+        }
+      });
+    }
+  }
+
+  Future<void> _handleBarcodeScan(String rawBarcode) async {
+    final barcode = rawBarcode.trim();
+    if (barcode.isEmpty) return;
+
+    // Deduplicate rapid barcode scanner bounces (within 350ms)
+    final now = DateTime.now();
+    if (_lastScannedBarcode == barcode &&
+        now.difference(_lastScanTime).inMilliseconds < 350) {
+      return;
+    }
+    _lastScannedBarcode = barcode;
+    _lastScanTime = now;
+
+    // 1. Check in already loaded products
+    final lower = barcode.toLowerCase();
+    Product? found;
+    for (final p in _products) {
+      if (p.barcode.toLowerCase() == lower || p.productCode.toLowerCase() == lower) {
+        found = p;
+        break;
+      }
+      for (final s in p.stocks) {
+        if ((s['stock_barcode'] ?? '').toString().toLowerCase() == lower) {
+          found = p.copyWithBatch(s);
+          break;
+        }
+      }
+      if (found != null) break;
+    }
+
+    if (found != null) {
+      _addToCart(found);
+      HapticFeedback.lightImpact();
+      _searchCtrl.clear();
+      setState(() => _displayedProducts = _products);
+      if (mounted) {
+        _searchFocus.requestFocus();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Added "${found.name}" to cart'),
+            duration: const Duration(seconds: 1),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+      return;
+    }
+
+    // 2. Fetch from backend via dedicated barcode lookup
+    try {
+      final data = await ApiService().getProductByBarcode(barcode);
+      if (data != null) {
+        final prefs = await SharedPreferences.getInstance();
+        final storeId = prefs.getString('store_id') ?? '';
+        final newProduct = Product.fromJson(data, targetStoreId: storeId);
+
+        if (!_products.any((p) => p.id == newProduct.id)) {
+          _products.add(newProduct);
+        }
+
+        _addToCart(newProduct);
+        HapticFeedback.lightImpact();
+        _searchCtrl.clear();
+        setState(() => _displayedProducts = _products);
+        if (mounted) {
+          _searchFocus.requestFocus();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Added "${newProduct.name}" to cart'),
+              duration: const Duration(seconds: 1),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+        return;
+      }
+    } catch (_) {}
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Product not found for barcode: $barcode'),
+          backgroundColor: Colors.orange.shade800,
+          duration: const Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      _searchCtrl.clear();
+      _searchFocus.requestFocus();
+    }
+  }
+
+  void _openCameraScanner() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.black,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => _PosCameraScannerSheet(
+        onBarcodeDetected: (scanned) {
+          Navigator.pop(ctx);
+          _handleBarcodeScan(scanned);
+        },
+      ),
+    );
+  }
+
+  void _clearCart() {
+    if (_cart.isEmpty) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.delete_outline, color: Colors.red),
+            SizedBox(width: 8),
+            Text('Clear Order?'),
+          ],
+        ),
+        content: const Text(
+          'Are you sure you want to remove all items from this order?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () {
+              Navigator.pop(ctx);
+              setState(() => _cart.clear());
+              _cartNotifier.value++;
+            },
+            child: const Text('Clear All'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _logout() async {
@@ -135,10 +362,11 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   double get _subtotal {
-    return _cart.fold(
+    final sum = _cart.fold(
       0.0,
-      (sum, item) => sum + (item.product.price * item.quantity),
+      (acc, item) => acc + (item.product.price * item.quantity),
     );
+    return double.parse(sum.toStringAsFixed(2));
   }
 
   double get _roundOffAmount {
@@ -172,7 +400,89 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
-  Widget _buildProductGrid() {
+  Widget _buildSearchBar() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
+      color: const Color(0xFFF5F7FA),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x0A000000),
+              blurRadius: 10,
+              offset: Offset(0, 4),
+            ),
+          ],
+          border: Border.all(color: Colors.grey.shade200),
+        ),
+        child: TextField(
+          controller: _searchCtrl,
+          focusNode: _searchFocus,
+          onChanged: _onSearchChanged,
+          onSubmitted: _handleBarcodeScan,
+          textInputAction: TextInputAction.search,
+          decoration: InputDecoration(
+            hintText: 'Scan Barcode or Search Products (Name / Code)...',
+            hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 14),
+            prefixIcon: Icon(
+              Icons.qr_code_scanner,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+            suffixIcon: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_isSearchingBackend)
+                  const Padding(
+                    padding: EdgeInsets.all(12),
+                    child: SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  ),
+                if (_searchCtrl.text.isNotEmpty)
+                  IconButton(
+                    icon: const Icon(Icons.close, size: 20, color: Colors.grey),
+                    onPressed: () {
+                      _searchCtrl.clear();
+                      _onSearchChanged('');
+                    },
+                  ),
+                IconButton(
+                  icon: const Icon(
+                    Icons.camera_alt_outlined,
+                    color: Colors.blue,
+                  ),
+                  tooltip: 'Camera Barcode Scanner',
+                  onPressed: _openCameraScanner,
+                ),
+              ],
+            ),
+            border: InputBorder.none,
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 14,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildProductSection({bool isMobile = false}) {
+    return Column(
+      children: [
+        _buildSearchBar(),
+        Expanded(
+          child: _buildProductGrid(bottomPadding: isMobile ? 90.0 : 24.0),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildProductGrid({double bottomPadding = 24.0}) {
     if (_isLoading) {
       return Center(
         child: Column(
@@ -192,25 +502,40 @@ class _PosScreenState extends State<PosScreen> {
         ),
       );
     }
-    if (_products.isEmpty) {
+    if (_displayedProducts.isEmpty) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
-              Icons.inventory_2_outlined,
+              _searchCtrl.text.isNotEmpty
+                  ? Icons.search_off_rounded
+                  : Icons.inventory_2_outlined,
               size: 64,
               color: Colors.grey.shade300,
             ),
             const SizedBox(height: 16),
             Text(
-              'No products available.',
+              _searchCtrl.text.isNotEmpty
+                  ? 'No products matching "${_searchCtrl.text}"'
+                  : 'No products available.',
               style: TextStyle(
-                fontSize: 18,
+                fontSize: 16,
                 color: Colors.grey.shade600,
                 fontWeight: FontWeight.w500,
               ),
             ),
+            if (_searchCtrl.text.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: () {
+                  _searchCtrl.clear();
+                  _onSearchChanged('');
+                },
+                icon: const Icon(Icons.clear, size: 16),
+                label: const Text('Clear Search'),
+              ),
+            ],
           ],
         ),
       );
@@ -224,16 +549,16 @@ class _PosScreenState extends State<PosScreen> {
     }
 
     return GridView.builder(
-      padding: const EdgeInsets.all(24),
+      padding: EdgeInsets.fromLTRB(24, 8, 24, bottomPadding),
       gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: crossAxisCount,
         childAspectRatio: screenWidth < 600 ? 0.75 : 0.8,
         crossAxisSpacing: 20,
         mainAxisSpacing: 20,
       ),
-      itemCount: _products.length,
+      itemCount: _displayedProducts.length,
       itemBuilder: (context, index) {
-        final p = _products[index];
+        final p = _displayedProducts[index];
         final List<Color> colors = [
           Colors.blue.shade50,
           Colors.purple.shade50,
@@ -471,9 +796,10 @@ class _PosScreenState extends State<PosScreen> {
   }
 
   void _checkout() {
-    if (_isProcessing) return; // block if already processing
+    if (_isProcessing || _cart.isEmpty) return; // block if already processing or empty
     showDialog(
       context: context,
+      barrierDismissible: !_isProcessing,
       builder: (context) {
         return SplitPaymentDialog(
           totalAmount: _totalAmount,
@@ -503,6 +829,9 @@ class _PosScreenState extends State<PosScreen> {
     } else {
       method = 'UPI';
     }
+
+    final clientSaleId = const Uuid().v4();
+    final currentEstNo = 'EST${_estCounter.toString().padLeft(4, "0")}';
 
     showDialog(
       context: context,
@@ -561,7 +890,9 @@ class _PosScreenState extends State<PosScreen> {
               "mrp": c.product.price,
               "sale_rate": c.product.price,
               "cost_price": c.product.price,
-              "taxable_amount": c.product.price * c.quantity,
+              "taxable_amount": double.parse(
+                (c.product.price * c.quantity).toStringAsFixed(2),
+              ),
               "cgst_percent": 0.0,
               "cgst_amount": 0.0,
               "sgst_percent": 0.0,
@@ -569,12 +900,16 @@ class _PosScreenState extends State<PosScreen> {
               "igst_percent": 0.0,
               "igst_amount": 0.0,
               "tax_amount": 0.0,
-              "line_total": c.product.price * c.quantity,
+              "line_total": double.parse(
+                (c.product.price * c.quantity).toStringAsFixed(2),
+              ),
             },
           )
           .toList();
 
       final saleData = {
+        "client_sale_id": clientSaleId,
+        "offline_invoice_no": currentEstNo,
         "store_id": storeId,
         "shift_id": shiftId,
         "financial_year_id": financialYearId,
@@ -626,8 +961,7 @@ class _PosScreenState extends State<PosScreen> {
       if (mounted) Navigator.pop(context);
 
       // Determine the final invoice number to display and print
-      final displayNo =
-          invoiceNo ?? 'EST${_estCounter.toString().padLeft(4, "0")}';
+      final displayNo = invoiceNo ?? currentEstNo;
 
       // Increment EST counter and persist
       final nextCounter = _estCounter + 1;
@@ -637,6 +971,7 @@ class _PosScreenState extends State<PosScreen> {
       final cartSnapshot = List<CartItem>.from(_cart);
 
       final billRecord = BillReceiptData(
+        id: clientSaleId,
         invoiceNo: displayNo,
         dateStr: DateTime.now().toString().substring(0, 16),
         items: cartSnapshot
@@ -645,7 +980,9 @@ class _PosScreenState extends State<PosScreen> {
                 name: c.product.name,
                 quantity: c.quantity.toDouble(),
                 price: c.product.price,
-                lineTotal: c.product.price * c.quantity,
+                lineTotal: double.parse(
+                  (c.product.price * c.quantity).toStringAsFixed(2),
+                ),
               ),
             )
             .toList(),
@@ -1007,7 +1344,7 @@ class _PosScreenState extends State<PosScreen> {
           if (isMobile) {
             return Stack(
               children: [
-                _buildProductGrid(),
+                _buildProductSection(isMobile: true),
                 if (_cart.isNotEmpty)
                   Positioned(
                     bottom: 0,
@@ -1132,7 +1469,7 @@ class _PosScreenState extends State<PosScreen> {
             children: [
               Expanded(
                 flex: _isCartVisible ? 9 : 14,
-                child: _buildProductGrid(),
+                child: _buildProductSection(isMobile: false),
               ),
               if (_isCartVisible)
                 Expanded(flex: 5, child: _buildCartUI(context)),
@@ -1193,7 +1530,17 @@ class _PosScreenState extends State<PosScreen> {
                     ),
                   ),
                   const Spacer(),
-                  if (_cart.isNotEmpty)
+                  if (_cart.isNotEmpty) ...[
+                    IconButton(
+                      icon: Icon(
+                        Icons.delete_sweep_outlined,
+                        color: Colors.red.shade400,
+                        size: 22,
+                      ),
+                      tooltip: 'Clear Order',
+                      onPressed: _clearCart,
+                    ),
+                    const SizedBox(width: 4),
                     Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 10,
@@ -1211,6 +1558,7 @@ class _PosScreenState extends State<PosScreen> {
                         ),
                       ),
                     ),
+                  ],
                 ],
               ),
             ),
@@ -1408,7 +1756,7 @@ class _PosScreenState extends State<PosScreen> {
                     width: double.infinity,
                     height: 64,
                     child: ElevatedButton(
-                      onPressed: _cart.isEmpty ? null : _checkout,
+                      onPressed: (_cart.isEmpty || _isProcessing) ? null : _checkout,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Theme.of(context).colorScheme.primary,
                         foregroundColor: Colors.white,
@@ -1466,6 +1814,7 @@ class _SplitPaymentDialogState extends State<SplitPaymentDialog> {
   final TextEditingController _cashCtrl = TextEditingController();
   final TextEditingController _upiCtrl = TextEditingController();
   bool _isAutoUpdating = false;
+  bool _isSubmitting = false; // Prevents duplicate payment clicks
 
   @override
   void initState() {
@@ -1690,7 +2039,7 @@ class _SplitPaymentDialogState extends State<SplitPaymentDialog> {
                 children: [
                   Expanded(
                     child: ElevatedButton.icon(
-                      onPressed: _setFullCash,
+                      onPressed: _isSubmitting ? null : _setFullCash,
                       icon: const Icon(Icons.payments_outlined, size: 18),
                       label: const Text('Full Cash'),
                       style: ElevatedButton.styleFrom(
@@ -1703,7 +2052,7 @@ class _SplitPaymentDialogState extends State<SplitPaymentDialog> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: ElevatedButton.icon(
-                      onPressed: _setFullUpi,
+                      onPressed: _isSubmitting ? null : _setFullUpi,
                       icon: const Icon(Icons.qr_code_scanner, size: 18),
                       label: const Text('Full UPI'),
                       style: ElevatedButton.styleFrom(
@@ -1729,6 +2078,7 @@ class _SplitPaymentDialogState extends State<SplitPaymentDialog> {
               const SizedBox(height: 8),
               TextFormField(
                 controller: _cashCtrl,
+                enabled: !_isSubmitting,
                 keyboardType: const TextInputType.numberWithOptions(
                   decimal: true,
                 ),
@@ -1762,6 +2112,7 @@ class _SplitPaymentDialogState extends State<SplitPaymentDialog> {
               const SizedBox(height: 8),
               TextFormField(
                 controller: _upiCtrl,
+                enabled: !_isSubmitting,
                 keyboardType: const TextInputType.numberWithOptions(
                   decimal: true,
                 ),
@@ -1787,23 +2138,26 @@ class _SplitPaymentDialogState extends State<SplitPaymentDialog> {
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.pop(context),
+          onPressed: _isSubmitting ? null : () => Navigator.pop(context),
           child: const Text('Cancel', style: TextStyle(fontSize: 16)),
         ),
         ElevatedButton(
-          onPressed: () {
-            double cash = double.tryParse(_cashCtrl.text) ?? 0;
-            double upi = double.tryParse(_upiCtrl.text) ?? 0;
-            if ((cash + upi - widget.totalAmount).abs() > 0.01) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Total split amounts must equal Total Due'),
-                ),
-              );
-              return;
-            }
-            widget.onConfirm(cash, upi);
-          },
+          onPressed: _isSubmitting
+              ? null
+              : () {
+                  double cash = double.tryParse(_cashCtrl.text) ?? 0;
+                  double upi = double.tryParse(_upiCtrl.text) ?? 0;
+                  if ((cash + upi - widget.totalAmount).abs() > 0.01) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Total split amounts must equal Total Due'),
+                      ),
+                    );
+                    return;
+                  }
+                  setState(() => _isSubmitting = true);
+                  widget.onConfirm(cash, upi);
+                },
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.blue.shade700,
             foregroundColor: Colors.white,
@@ -1812,12 +2166,143 @@ class _SplitPaymentDialogState extends State<SplitPaymentDialog> {
               borderRadius: BorderRadius.circular(8),
             ),
           ),
-          child: const Text(
-            'Complete Payment',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-          ),
+          child: _isSubmitting
+              ? const SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.5,
+                    color: Colors.white,
+                  ),
+                )
+              : const Text(
+                  'Complete Payment',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
         ),
       ],
+    );
+  }
+}
+
+/// Phone / Tablet Camera Barcode Scanner Sheet for POS
+class _PosCameraScannerSheet extends StatefulWidget {
+  final Function(String barcode) onBarcodeDetected;
+
+  const _PosCameraScannerSheet({required this.onBarcodeDetected});
+
+  @override
+  State<_PosCameraScannerSheet> createState() => _PosCameraScannerSheetState();
+}
+
+class _PosCameraScannerSheetState extends State<_PosCameraScannerSheet> {
+  MobileScannerController? _controller;
+  bool _isReady = false;
+  bool _isScanned = false;
+  bool _torchOn = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _controller = MobileScannerController(
+          autoStart: true,
+          detectionSpeed: DetectionSpeed.normal,
+          facing: CameraFacing.back,
+        );
+        setState(() => _isReady = true);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: MediaQuery.of(context).size.height * 0.7,
+      child: Stack(
+        children: [
+          ClipRRect(
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+            child: _isReady && _controller != null
+                ? MobileScanner(
+                    controller: _controller!,
+                    fit: BoxFit.cover,
+                    onDetect: (capture) {
+                      if (_isScanned) return;
+                      for (final barcode in capture.barcodes) {
+                        final raw = barcode.rawValue;
+                        if (raw != null && raw.trim().isNotEmpty) {
+                          _isScanned = true;
+                          widget.onBarcodeDetected(raw.trim());
+                          break;
+                        }
+                      }
+                    },
+                  )
+                : const Center(
+                    child: CircularProgressIndicator(color: Colors.white),
+                  ),
+          ),
+          Positioned(
+            top: 16,
+            left: 16,
+            right: 16,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.6),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.qr_code_scanner, color: Colors.white, size: 18),
+                      SizedBox(width: 8),
+                      Text(
+                        'Point at Barcode',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Row(
+                  children: [
+                    IconButton(
+                      icon: Icon(
+                        _torchOn ? Icons.flash_on : Icons.flash_off,
+                        color: Colors.white,
+                      ),
+                      onPressed: () {
+                        setState(() => _torchOn = !_torchOn);
+                        _controller?.toggleTorch();
+                      },
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

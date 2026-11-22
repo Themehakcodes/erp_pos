@@ -222,6 +222,8 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
   }
 
   Future<void> _reprintBill(BillReceiptData bill) async {
+    if (_printingInvoiceNo != null) return; // Prevent duplicate reprint calls while printing
+
     if (widget.selectedPrinter == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
