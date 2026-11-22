@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'dart:io';
 import 'dart:convert';
 import '../api_service.dart';
 import 'main_home.dart';
@@ -131,10 +129,12 @@ class _OpeningBalanceScreenState extends State<OpeningBalanceScreen> {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
         if (errStr.contains('Session expired') || errStr.contains('Unauthorized') || errStr.contains('revoked')) {
           await prefs.remove('access_token');
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (_) => const LoginScreen()),
-          );
+          if (mounted) {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (_) => const LoginScreen()),
+            );
+          }
         }
       }
     } finally {
@@ -182,7 +182,7 @@ class _OpeningBalanceScreenState extends State<OpeningBalanceScreen> {
             color: Colors.white,
             borderRadius: BorderRadius.circular(16),
             boxShadow: [
-              BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 20),
+              BoxShadow(color: const Color(0x0D000000), blurRadius: 20),
             ],
           ),
           child: Column(

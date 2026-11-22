@@ -3,7 +3,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../api_service.dart';
 import 'main_home.dart';
 import 'login_screen.dart';
-import 'splash_loader.dart';
 import 'device_not_registered_screen.dart';
 import 'opening_balance_screen.dart';
 
@@ -84,7 +83,7 @@ class _SplashLoaderState extends State<SplashLoader> {
         
         // Network/timeout errors → show retry screen
         if (errStr.contains('TimeoutException') || errStr.contains('SocketException') || errStr.contains('Failed host lookup') || errStr.contains('Connection refused')) {
-          throw e; // Goes to outer catch → shows retry screen
+          rethrow; // Goes to outer catch → shows retry screen
         }
         
         // Any other error (terminal not found, 404, not registered, etc.) → register device

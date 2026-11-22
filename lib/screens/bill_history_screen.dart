@@ -376,7 +376,7 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
                     padding:
                         const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                     decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.primary.withOpacity(0.12),
+                      color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Text(
@@ -554,7 +554,7 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
                           ? Colors.amber.shade50
                           : (bill.isCancelled
                               ? Colors.red.shade50
-                              : Theme.of(context).colorScheme.primary.withOpacity(0.08)),
+                              : Theme.of(context).colorScheme.primary.withValues(alpha: 0.08)),
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Icon(
@@ -1021,10 +1021,10 @@ class _BillDetailsSheetState extends State<_BillDetailsSheet> {
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
               color: Colors.white,
-              boxShadow: [
+              boxShadow: const [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.05),
-                  offset: const Offset(0, -2),
+                  color: Color(0x0D000000),
+                  offset: Offset(0, -2),
                   blurRadius: 10,
                 ),
               ],

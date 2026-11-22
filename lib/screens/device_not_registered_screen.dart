@@ -1,23 +1,7 @@
-import 'main_home.dart';
-import 'pos_screen.dart';
-import 'sales_screen.dart';
-import 'settings_tab.dart';
-import 'login_screen.dart';
-import 'splash_loader.dart';
-import 'device_not_registered_screen.dart';
-import 'opening_balance_screen.dart';
 import 'package:flutter/material.dart';
-
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:flutter_pos_printer_platform_image_3/flutter_pos_printer_platform_image_3.dart';
-import 'package:qr_flutter/qr_flutter.dart';
-import 'dart:io';
-import 'dart:convert';
-import 'dart:async';
 import '../api_service.dart';
-import '../models/models.dart';
-import 'package:flutter/material.dart';
+import 'splash_loader.dart';
 
 class DeviceNotRegisteredScreen extends StatefulWidget {
   final String deviceId;
@@ -32,7 +16,6 @@ class _DeviceNotRegisteredScreenState extends State<DeviceNotRegisteredScreen> {
   List<dynamic> _stores = [];
   String? _selectedStore;
   bool _isLoading = true;
-  bool _isCartVisible = true;
 
   @override
   void initState() {
@@ -42,21 +25,27 @@ class _DeviceNotRegisteredScreenState extends State<DeviceNotRegisteredScreen> {
 
   void _fetchStores() async {
     try {
-      final res = await ApiService().getStores();
+      final stores = await ApiService().getStores();
       setState(() {
-        _stores = res;
+        _stores = stores;
+        if (_stores.isNotEmpty) {
+          _selectedStore = _stores[0]['id'];
+        }
         _isLoading = false;
-        if (_stores.isNotEmpty) _selectedStore = _stores[0]['id'];
       });
     } catch(e) {
       setState(() => _isLoading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to load stores: $e')));
+      }
     }
   }
-  
+
   void _register() async {
     if (_selectedStore == null) return;
+    setState(() => _isLoading = true);
     try {
-      if (widget.existingTerminalId != null) {
+      if (widget.existingTerminalId != null && widget.existingTerminalId!.isNotEmpty) {
         await ApiService().updateTerminal(widget.existingTerminalId!, _selectedStore!, widget.deviceId);
       } else {
         await ApiService().registerTerminal(_selectedStore!, widget.deviceId);
@@ -70,7 +59,10 @@ class _DeviceNotRegisteredScreenState extends State<DeviceNotRegisteredScreen> {
         );
       }
     } catch(e) {
-       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      }
     }
   }
 
@@ -83,21 +75,25 @@ class _DeviceNotRegisteredScreenState extends State<DeviceNotRegisteredScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('Select Store:'),
+            Text('Device ID: ${widget.deviceId}', style: const TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 16),
+            const Text('Select Store for this Terminal:'),
             DropdownButton<String>(
               value: _selectedStore,
-              items: _stores.map<DropdownMenuItem<String>>((s) => DropdownMenuItem<String>(value: s['id'], child: Text(s['store_name'] ?? s['name'] ?? 'Unknown Store'))).toList(),
-              onChanged: (v) => setState(() => _selectedStore = v),
+              items: _stores.map((s) => DropdownMenuItem<String>(
+                value: s['id'] as String,
+                child: Text(s['name'] ?? s['store_name'] ?? 'Unknown Store'),
+              )).toList(),
+              onChanged: (val) => setState(() => _selectedStore = val),
             ),
-            const SizedBox(height: 20),
-            ElevatedButton(onPressed: _register, child: const Text('Register & Continue'))
-          ]
-        )
-      )
+            const SizedBox(height: 24),
+            ElevatedButton(
+              onPressed: _register,
+              child: const Text('Link & Start Terminal'),
+            )
+          ],
+        ),
+      ),
     );
   }
-
-
 }
-
-

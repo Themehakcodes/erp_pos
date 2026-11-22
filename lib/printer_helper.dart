@@ -5,7 +5,6 @@ import 'package:nyx_printer_flutter/nyx_printer.dart';
 import 'package:nyx_printer_flutter/nyx_printer_definition.dart';
 
 import 'dart:async';
-import 'dart:typed_data';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'models/models.dart';
 

@@ -73,10 +73,11 @@ class _PosScreenState extends State<PosScreen> {
       });
     } catch (e) {
       setState(() => _isLoading = false);
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text(e.toString())));
+      }
     }
   }
 
@@ -216,10 +217,11 @@ class _PosScreenState extends State<PosScreen> {
     }
     final screenWidth = MediaQuery.of(context).size.width;
     int crossAxisCount = 4;
-    if (screenWidth < 600)
+    if (screenWidth < 600) {
       crossAxisCount = 2;
-    else if (screenWidth < 900)
+    } else if (screenWidth < 900) {
       crossAxisCount = 3;
+    }
 
     return GridView.builder(
       padding: const EdgeInsets.all(24),
@@ -260,11 +262,11 @@ class _PosScreenState extends State<PosScreen> {
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(20),
-            boxShadow: [
+            boxShadow: const [
               BoxShadow(
-                color: Colors.black.withOpacity(0.04),
+                color: Color(0x0A000000),
                 blurRadius: 15,
-                offset: const Offset(0, 8),
+                offset: Offset(0, 8),
               ),
             ],
             border: Border.all(color: Colors.grey.shade100, width: 1.5),
@@ -275,8 +277,8 @@ class _PosScreenState extends State<PosScreen> {
             child: InkWell(
               onTap: () => _addToCart(p),
               borderRadius: BorderRadius.circular(20),
-              splashColor: iconColor.withOpacity(0.2),
-              highlightColor: iconColor.withOpacity(0.1),
+              splashColor: iconColor.withValues(alpha: 0.2),
+              highlightColor: iconColor.withValues(alpha: 0.1),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -756,7 +758,7 @@ class _PosScreenState extends State<PosScreen> {
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+                color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Icon(
@@ -779,7 +781,7 @@ class _PosScreenState extends State<PosScreen> {
         elevation: 0,
         backgroundColor: Colors.white,
         foregroundColor: Colors.black87,
-        shadowColor: Colors.black.withOpacity(0.05),
+        shadowColor: const Color(0x0D000000),
         surfaceTintColor: Colors.transparent,
         actions: [
           Center(
@@ -878,14 +880,16 @@ class _PosScreenState extends State<PosScreen> {
               icon: Icon(Icons.lock_clock, color: Colors.orange.shade800),
               tooltip: 'Close Shift',
               onPressed: () async {
+                final scaffoldMessenger = ScaffoldMessenger.of(context);
                 final prefs = await SharedPreferences.getInstance();
                 final shiftId = prefs.getString('shift_id');
                 if (shiftId == null) return;
+                if (!context.mounted) return;
 
                 double closingCash = 0;
                 final res = await showDialog<bool>(
                   context: context,
-                  builder: (context) {
+                  builder: (dialogCtx) {
                     final txt = TextEditingController();
                     return AlertDialog(
                       shape: RoundedRectangleBorder(
@@ -918,7 +922,7 @@ class _PosScreenState extends State<PosScreen> {
                       ),
                       actions: [
                         TextButton(
-                          onPressed: () => Navigator.pop(context, false),
+                          onPressed: () => Navigator.pop(dialogCtx, false),
                           child: const Text('Cancel'),
                         ),
                         ElevatedButton(
@@ -931,7 +935,7 @@ class _PosScreenState extends State<PosScreen> {
                           ),
                           onPressed: () {
                             closingCash = double.tryParse(txt.text) ?? 0;
-                            Navigator.pop(context, true);
+                            Navigator.pop(dialogCtx, true);
                           },
                           child: const Text('Confirm Close'),
                         ),
@@ -944,9 +948,9 @@ class _PosScreenState extends State<PosScreen> {
                   try {
                     await ApiService().closeShift(shiftId, closingCash);
                     try {
-                      final prefs = await SharedPreferences.getInstance();
-                      final storeId = prefs.getString('store_id') ?? '';
-                      final terminalId = prefs.getString('terminal_id') ?? '';
+                      final p = await SharedPreferences.getInstance();
+                      final storeId = p.getString('store_id') ?? '';
+                      final terminalId = p.getString('terminal_id') ?? '';
                       await PrinterHelper.printShiftReceipt(
                         widget.selectedPrinter,
                         false,
@@ -959,22 +963,22 @@ class _PosScreenState extends State<PosScreen> {
                     }
                     _logout();
                   } catch (e) {
-                    if (mounted)
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            e.toString().replaceAll('Exception: ', ''),
-                          ),
-                          backgroundColor: Colors.red,
-                          behavior: SnackBarBehavior.floating,
-                          duration: const Duration(seconds: 5),
-                          margin: const EdgeInsets.only(
-                            bottom: 600,
-                            left: 16,
-                            right: 16,
-                          ),
+                    if (!mounted) return;
+                    scaffoldMessenger.showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          e.toString().replaceAll('Exception: ', ''),
                         ),
-                      );
+                        backgroundColor: Colors.red,
+                        behavior: SnackBarBehavior.floating,
+                        duration: const Duration(seconds: 5),
+                        margin: const EdgeInsets.only(
+                          bottom: 600,
+                          left: 16,
+                          right: 16,
+                        ),
+                      ),
+                    );
                   }
                 }
               },
@@ -1012,11 +1016,11 @@ class _PosScreenState extends State<PosScreen> {
                     child: Container(
                       decoration: BoxDecoration(
                         color: Colors.white,
-                        boxShadow: [
+                        boxShadow: const [
                           BoxShadow(
-                            color: Colors.black.withOpacity(0.1),
+                            color: Color(0x1A000000),
                             blurRadius: 10,
-                            offset: const Offset(0, -5),
+                            offset: Offset(0, -5),
                           ),
                         ],
                       ),
@@ -1058,7 +1062,7 @@ class _PosScreenState extends State<PosScreen> {
                                   builder: (context) =>
                                       ValueListenableBuilder<int>(
                                         valueListenable: _cartNotifier,
-                                        builder: (context, _, __) {
+                                        builder: (context, _, child) {
                                           return Container(
                                             height:
                                                 MediaQuery.of(
@@ -1145,11 +1149,11 @@ class _PosScreenState extends State<PosScreen> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(24),
-        boxShadow: [
+        boxShadow: const [
           BoxShadow(
-            color: Colors.black.withOpacity(0.06),
+            color: Color(0x0F000000),
             blurRadius: 20,
-            offset: const Offset(0, 10),
+            offset: Offset(0, 10),
           ),
         ],
       ),

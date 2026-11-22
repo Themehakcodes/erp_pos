@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../api_service.dart';
 import 'splash_loader.dart';
@@ -64,7 +63,7 @@ class _LoginScreenState extends State<LoginScreen> {
               final newUrl = urlController.text.trim();
               if (newUrl.isNotEmpty) {
                 await ApiService.setBaseUrl(newUrl);
-                if (mounted) {
+                if (context.mounted) {
                   Navigator.pop(context);
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('Server URL updated successfully')),
@@ -138,7 +137,7 @@ class _LoginScreenState extends State<LoginScreen> {
             borderRadius: BorderRadius.circular(24),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.05),
+                color: const Color(0x0D000000),
                 blurRadius: 20,
                 offset: const Offset(0, 10),
               ),
@@ -151,7 +150,7 @@ class _LoginScreenState extends State<LoginScreen> {
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+                  color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
