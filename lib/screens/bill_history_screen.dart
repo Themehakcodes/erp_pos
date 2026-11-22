@@ -33,6 +33,7 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
 
   // Track which bill is currently reprinting to show spinner on its button
   String? _printingInvoiceNo;
+  bool _isSyncingOffline = false;
 
   @override
   void initState() {
@@ -500,12 +501,141 @@ class _BillHistoryScreenState extends State<BillHistoryScreen>
                     children: [
                       _buildBillsList(_getFilteredList(_shiftBills), 'No bills found in this shift.'),
                       _buildBillsList(_getFilteredList(_todayBills), 'No bills found today.'),
-                      _buildBillsList(_getFilteredList(_offlineBills), 'No unsynced offline bills.'),
+                      _buildOfflineTab(),
                     ],
                   ),
           ),
         ],
       ),
+    );
+  }
+
+  Future<void> _triggerManualOfflineSync() async {
+    if (_isSyncingOffline) return;
+    setState(() => _isSyncingOffline = true);
+
+    try {
+      final synced = await ApiService().syncOfflineSales();
+      await _fetchAllTabsData();
+      if (mounted) {
+        if (synced > 0) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Successfully synced $synced offline bills to cloud!'),
+              backgroundColor: Colors.green,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('All bills synced or network busy.'),
+              backgroundColor: Colors.blue,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Sync error: $e'),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSyncingOffline = false);
+    }
+  }
+
+  Widget _buildOfflineTab() {
+    final filtered = _getFilteredList(_offlineBills);
+    if (_offlineBills.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.cloud_done_outlined, size: 64, color: Colors.green.shade400),
+            const SizedBox(height: 12),
+            Text(
+              'All bills are fully synced to cloud!',
+              style: TextStyle(fontSize: 16, color: Colors.grey.shade700, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'No pending offline bills on this device.',
+              style: TextStyle(fontSize: 13, color: Colors.grey.shade500),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Column(
+      children: [
+        Container(
+          margin: const EdgeInsets.fromLTRB(14, 12, 14, 6),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            color: Colors.amber.shade50,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.amber.shade200),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.cloud_off_rounded, color: Colors.amber.shade800, size: 28),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${_offlineBills.length} Offline Bills Saved Locally',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                        color: Colors.amber.shade900,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Auto-syncs in background every 30s or tap to sync now:',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.amber.shade800,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton.icon(
+                onPressed: _isSyncingOffline ? null : _triggerManualOfflineSync,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.amber.shade800,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                icon: _isSyncingOffline
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Icon(Icons.cloud_upload_outlined, size: 18),
+                label: Text(_isSyncingOffline ? 'Syncing...' : 'Sync Now'),
+              ),
+            ],
+          ),
+        ),
+        Expanded(child: _buildBillsList(filtered, 'No matching offline bills found.')),
+      ],
     );
   }
 

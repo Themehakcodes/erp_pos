@@ -43,6 +43,7 @@ class _PosScreenState extends State<PosScreen> {
   bool _isSearchingBackend = false;
   String _lastScannedBarcode = '';
   DateTime _lastScanTime = DateTime.fromMillisecondsSinceEpoch(0);
+  int _offlineCount = 0;
 
   @override
   void initState() {
@@ -59,9 +60,18 @@ class _PosScreenState extends State<PosScreen> {
     super.dispose();
   }
 
+  Future<void> _updateOfflineCount() async {
+    final prefs = await SharedPreferences.getInstance();
+    final count = (prefs.getStringList('offline_sales') ?? []).length;
+    if (mounted && _offlineCount != count) {
+      setState(() => _offlineCount = count);
+    }
+  }
+
   Future<void> _loadData() async {
     final prefs = await SharedPreferences.getInstance();
     final storeId = prefs.getString('store_id') ?? '';
+    _updateOfflineCount();
     setState(() {
       _userId = prefs.getString('user_name') ?? 'Cashier';
       _estCounter = prefs.getInt('est_counter') ?? 1;
@@ -1009,6 +1019,7 @@ class _PosScreenState extends State<PosScreen> {
         _estCounter = nextCounter;
       });
       _cartNotifier.value++;
+      _updateOfflineCount();
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1185,6 +1196,67 @@ class _PosScreenState extends State<PosScreen> {
               ),
             ),
           ),
+          if (_offlineCount > 0) ...[
+            Container(
+              margin: const EdgeInsets.symmetric(vertical: 8),
+              child: Material(
+                color: Colors.amber.shade100,
+                borderRadius: BorderRadius.circular(16),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(16),
+                  onTap: () async {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          'Syncing $_offlineCount offline bills to cloud...',
+                        ),
+                        duration: const Duration(seconds: 2),
+                        behavior: SnackBarBehavior.floating,
+                      ),
+                    );
+                    final synced = await ApiService().syncOfflineSales();
+                    await _updateOfflineCount();
+                    if (context.mounted && synced > 0) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'Synced $synced bills to cloud successfully!',
+                          ),
+                          backgroundColor: Colors.green,
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    }
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.cloud_upload,
+                          size: 16,
+                          color: Colors.amber.shade900,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          '$_offlineCount Offline',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                            color: Colors.amber.shade900,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+          ],
           Container(
             margin: const EdgeInsets.symmetric(vertical: 8),
             decoration: BoxDecoration(

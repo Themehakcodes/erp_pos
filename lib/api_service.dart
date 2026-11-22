@@ -84,6 +84,9 @@ class ApiService {
         Uri.parse('$baseUrl/auth/heartbeat'),
         headers: await getAuthHeaders(),
       ).timeout(const Duration(seconds: 10));
+    } catch (_) {}
+
+    try {
       await syncOfflineSales();
     } catch (_) {}
   }
@@ -300,6 +303,8 @@ class ApiService {
       ).timeout(const Duration(seconds: 12));
 
       if (res.statusCode == 200 || res.statusCode == 201) {
+        // Opportunistically sync older offline bills in background while connection is confirmed alive
+        unawaited(syncOfflineSales());
         try {
           final body = jsonDecode(res.body);
           final data = body['data'];
@@ -333,14 +338,15 @@ class ApiService {
 
   static bool _isSyncing = false;
 
-  Future<void> syncOfflineSales() async {
-    if (_isSyncing) return;
+  Future<int> syncOfflineSales() async {
+    if (_isSyncing) return 0;
     
     final prefs = await SharedPreferences.getInstance();
     final offlineSales = prefs.getStringList('offline_sales') ?? [];
-    if (offlineSales.isEmpty) return;
+    if (offlineSales.isEmpty) return 0;
 
     _isSyncing = true;
+    int syncedCount = 0;
     try {
       final Set<String> syncedClientIds = {};
       final Set<String> syncedRawStrings = {};
@@ -357,13 +363,15 @@ class ApiService {
         } catch (_) {}
 
         try {
+          // Generous 25-second timeout to handle slow 2G/3G connections or high latency
           final res = await http.post(
             Uri.parse('$baseUrl/sales/'),
             headers: headers,
             body: saleStr,
-          ).timeout(const Duration(seconds: 12));
+          ).timeout(const Duration(seconds: 25));
 
           if (res.statusCode == 200 || res.statusCode == 201) {
+            syncedCount++;
             if (clientId != null && clientId.isNotEmpty) {
               syncedClientIds.add(clientId);
             }
@@ -382,7 +390,7 @@ class ApiService {
             syncedRawStrings.add(saleStr);
           }
         } catch (e) {
-          debugPrint('Offline sale sync network error: $e');
+          debugPrint('Offline sale sync network error (will retry automatically): $e');
         }
         // Small delay between requests to prevent flooding the event loop
         await Future.delayed(const Duration(milliseconds: 100));
@@ -403,6 +411,7 @@ class ApiService {
       }).toList();
 
       await prefs.setStringList('offline_sales', remainingSales);
+      return syncedCount;
     } finally {
       _isSyncing = false;
     }
